@@ -4,8 +4,12 @@ import {
   base32Encode,
   b64decode,
   b64encode,
+  clearSessionCookie,
+  createSession,
   generateTotpSecret,
+  getSessionId,
   hashPassword,
+  sessionCookie,
   unwrapField,
   verifyPassword,
   verifyTotp,
@@ -60,6 +64,36 @@ describe('密码哈希', () => {
 
   it('相同密码每次盐不同', async () => {
     expect(await hashPassword('same')).not.toBe(await hashPassword('same'));
+  });
+});
+
+describe('无状态会话', () => {
+  const KEY = 'test-session-key';
+  const reqWithCookie = (v: string) => new Request('https://x/', { headers: { Cookie: `sw_sess=${v}` } });
+
+  it('签发后验签通过（不依赖任何存储）', async () => {
+    const value = await createSession(KEY);
+    expect(value).toMatch(/^[0-9a-f]{48}\.\d+\.[0-9a-f]{32}$/);
+    expect(await getSessionId(KEY, reqWithCookie(value))).toMatch(/^[0-9a-f]{48}$/);
+  });
+
+  it('无 Cookie / 篡改签名 / 篡改时间戳均拒绝', async () => {
+    expect(await getSessionId(KEY, new Request('https://x/'))).toBeNull();
+    const value = await createSession(KEY);
+    const [sid, ts, sig] = value.split('.');
+    expect(await getSessionId(KEY, reqWithCookie(`${sid}.${ts}.deadbeef`))).toBeNull();
+    expect(await getSessionId(KEY, reqWithCookie(`${sid}.${Number(ts) + 1}.${sig}`))).toBeNull();
+    expect(await getSessionId(KEY, reqWithCookie(`garbage`))).toBeNull();
+  });
+
+  it('换密钥后旧会话失效（secrets 轮换即全员下线）', async () => {
+    const value = await createSession(KEY);
+    expect(await getSessionId('another-key', reqWithCookie(value))).toBeNull();
+  });
+
+  it('Cookie 头含过期与安全属性', () => {
+    expect(sessionCookie('abc')).toBe('sw_sess=abc; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=604800');
+    expect(clearSessionCookie()).toContain('Max-Age=0');
   });
 });
 
