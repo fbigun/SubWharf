@@ -1,5 +1,7 @@
-# CNB 流水线：push 到 main 触发 校验 + 部署到 Cloudflare Workers
-# Cloudflare 凭据经密钥仓库注入（imports），token 用「编辑 Cloudflare Workers」模板创建
+# CNB 流水线：push 到 main 触发 校验 + 自动初始化资源 + 部署到 Cloudflare Workers
+# Cloudflare 凭据经密钥仓库注入（imports），需包含：
+#   CLOUDFLARE_API_TOKEN（「编辑 Cloudflare Workers」模板）
+#   CLOUDFLARE_ACCOUNT_ID / SESSION_KEY / WRAP_KEY / SETUP_CODE
 main:
   push:
     - docker:
@@ -13,5 +15,15 @@ main:
           script: npx tsc --noEmit
         - name: 单元测试
           script: npx vitest run
+        - name: 确保 KV namespace
+          script: node scripts/ensure-kv.mjs
         - name: 部署 Cloudflare Workers
           script: npx wrangler deploy
+        - name: 写入 Worker secrets
+          script: |
+            : "${SESSION_KEY:?密钥仓库缺少 SESSION_KEY}"
+            : "${WRAP_KEY:?密钥仓库缺少 WRAP_KEY}"
+            : "${SETUP_CODE:?密钥仓库缺少 SETUP_CODE}"
+            printf '%s' "$SESSION_KEY" | npx wrangler secret put SESSION_KEY
+            printf '%s' "$WRAP_KEY" | npx wrangler secret put WRAP_KEY
+            printf '%s' "$SETUP_CODE" | npx wrangler secret put SETUP_CODE
