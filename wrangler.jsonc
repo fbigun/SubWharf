@@ -13,6 +13,7 @@
     "crons": ["0 1,13 * * *"]
   },
   "kv_namespaces": [
+    // id 由 scripts/ensure-kv.mjs 在部署前自动检测/创建并回写（本地手动部署亦可用）
     { "binding": "KV", "id": "d3f4c9e06ef04b5692619f870142e394" }
   ]
 }
