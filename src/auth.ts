@@ -168,6 +168,9 @@ export async function unwrapField(env: Pick<Env, 'WRAP_KEY'>, wrapped: string): 
 }
 
 // ---------- 会话 ----------
+// 无状态签名 Cookie：KV 是最终一致性存储，登录后立即在另一边缘节点读会 miss（401 踢回登录页），
+// 故会话不落 KV，验签即有效；过期由签发时间戳 + Cookie Max-Age 双重约束，登出即清 Cookie。
+// 代价是无法服务端吊销单个会话（单管理员场景可接受）。
 
 const SESSION_COOKIE = 'sw_sess';
 const SESSION_TTL = 7 * 24 * 3600; // 7 天
@@ -188,11 +191,11 @@ function parseCookie(req: Request): Record<string, string> {
   return out;
 }
 
-/** 生成会话并写入 KV，返回形如 "sid.签名" 的 Cookie 值 */
-export async function createSession(env: Env): Promise<string> {
+/** 生成形如 "sid.签发秒.签名" 的无状态会话值 */
+export async function createSession(secretKey: string): Promise<string> {
   const sid = hex(crypto.getRandomValues(new Uint8Array(24)));
-  await env.KV.put(`sess:${sid}`, JSON.stringify({ createdAt: Date.now() }), { expirationTtl: SESSION_TTL });
-  return `${sid}.${await hmacHex(env.SESSION_KEY, sid)}`;
+  const ts = Math.floor(Date.now() / 1000);
+  return `${sid}.${ts}.${await hmacHex(secretKey, `${sid}.${ts}`)}`;
 }
 
 export function sessionCookie(value: string): string {
@@ -203,21 +206,17 @@ export function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
 }
 
-/** 校验 Cookie 签名并确认会话仍在 KV 中，返回 sid */
-export async function getSessionId(env: Env, req: Request): Promise<string | null> {
+/** 验签 + 签发时间未过期则返回 sid，否则 null */
+export async function getSessionId(secretKey: string, req: Request): Promise<string | null> {
   const value = parseCookie(req)[SESSION_COOKIE];
   if (!value) return null;
-  const i = value.lastIndexOf('.');
-  if (i <= 0) return null;
-  const sid = value.slice(0, i);
-  const sig = value.slice(i + 1);
-  if ((await hmacHex(env.SESSION_KEY, sid)) !== sig) return null;
-  return (await env.KV.get(`sess:${sid}`)) ? sid : null;
-}
-
-export async function destroySession(env: Env, req: Request): Promise<void> {
-  const value = parseCookie(req)[SESSION_COOKIE];
-  if (value) await env.KV.delete(`sess:${value.split('.')[0]}`);
+  const parts = value.split('.');
+  if (parts.length !== 3) return null;
+  const [sid, ts, sig] = parts;
+  if (!/^[0-9a-f]{48}$/.test(sid) || !/^\d+$/.test(ts)) return null;
+  if (Number(ts) + SESSION_TTL < Math.floor(Date.now() / 1000)) return null;
+  if ((await hmacHex(secretKey, `${sid}.${ts}`)) !== sig) return null;
+  return sid;
 }
 
 // ---------- 登录限速（5 次失败锁 15 分钟）----------

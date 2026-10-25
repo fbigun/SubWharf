@@ -5,7 +5,6 @@ import {
   clearLoginFail,
   clearSessionCookie,
   createSession,
-  destroySession,
   generateTotpSecret,
   getSessionId,
   hashPassword,
@@ -91,17 +90,16 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
   // 无需登录
   if (p === '/api/me' && method === 'GET') {
     const initialized = !!(await env.KV.get('profile'));
-    return json({ initialized, authed: !!(await getSessionId(env, req)) });
+    return json({ initialized, authed: !!(await getSessionId(env.SESSION_KEY, req)) });
   }
   if (p === '/api/setup' && method === 'POST') return setup(req, env);
   if (p === '/api/setup/verify' && method === 'POST') return setupVerify(req, env);
   if (p === '/api/login' && method === 'POST') return login(req, env);
 
-  // 以下全部需要会话
-  if (!(await getSessionId(env, req))) return err('未登录', 401);
+  // 以下全部需要会话（无状态签名 Cookie，验签即登录）
+  if (!(await getSessionId(env.SESSION_KEY, req))) return err('未登录', 401);
 
   if (p === '/api/logout' && method === 'POST') {
-    await destroySession(env, req);
     return json({ ok: true }, 200, { 'Set-Cookie': clearSessionCookie() });
   }
 
@@ -283,7 +281,7 @@ async function setupVerify(req: Request, env: Env): Promise<Response> {
   await clearLoginFail(env);
   profile.totpVerified = true;
   await env.KV.put('profile', JSON.stringify(profile));
-  const value = await createSession(env);
+  const value = await createSession(env.SESSION_KEY);
   return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(value) });
 }
 
@@ -301,6 +299,6 @@ async function login(req: Request, env: Env): Promise<Response> {
     return err('密码或验证码错误', 403);
   }
   await clearLoginFail(env);
-  const value = await createSession(env);
+  const value = await createSession(env.SESSION_KEY);
   return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(value) });
 }
