@@ -10,7 +10,7 @@ function run(cmd) {
 }
 
 function findNamespace() {
-  const list = JSON.parse(run('npx wrangler kv namespace list --json'));
+  const list = JSON.parse(run('npx wrangler kv namespace list'));
   return Array.isArray(list) ? list.find((ns) => ns.title === TITLE) : null;
 }
 
