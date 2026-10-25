@@ -90,6 +90,12 @@ SubWharf 是部署在 Cloudflare Workers 上的个人订阅中转与管理面板
 wrangler.jsonc 声明：KV 绑定、crons、assets 目录。
 workers.dev 域名在境内被 DNS 污染，务必绑定自定义域名。
 
+自动部署（CNB 流水线）：push 到 main 触发 .cnb.yml——npm ci → 类型检查
+→ 测试 → npx wrangler deploy。Cloudflare 凭据经 CNB 密钥仓库注入：创建
+密钥仓库 fbigun/secrets，在 Web 界面添加 cloudflare.yml（内容为
+CLOUDFLARE_API_TOKEN 与 CLOUDFLARE_ACCOUNT_ID 两行），.cnb.yml 通过
+imports 引用；token 用「编辑 Cloudflare Workers」权限模板创建。
+
 六、配额核对（免费版）
 ----------------------------------------------------------------------
   KV 读    100,000/天    用量约几百/天
