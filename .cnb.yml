@@ -1,0 +1,17 @@
+# CNB 流水线：push 到 main 触发 校验 + 部署到 Cloudflare Workers
+# Cloudflare 凭据经密钥仓库注入（imports），token 用「编辑 Cloudflare Workers」模板创建
+main:
+  push:
+    - docker:
+        image: node:24
+      imports:
+        - https://cnb.cool/fbigun/secrets/-/blob/main/cloudflare.yml
+      stages:
+        - name: 安装依赖
+          script: npm ci --no-audit --no-fund
+        - name: 类型检查
+          script: npx tsc --noEmit
+        - name: 单元测试
+          script: npx vitest run
+        - name: 部署 Cloudflare Workers
+          script: npx wrangler deploy
