@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SubWharf · 订阅码头</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>⚓ SubWharf</h1>
+  <span class="dim" id="who"></span>
+  <button id="btn-logout" class="hidden">退出登录</button>
+</header>
+
+<main>
+  <!-- 首次初始化 -->
+  <section id="view-setup" class="hidden">
+    <h2>初始化</h2>
+    <p class="dim">首次部署需要设置管理密码并绑定 TOTP 双因子。</p>
+    <form id="form-setup">
+      <label>初始化口令（部署时设置的 SETUP_CODE）<input type="password" id="su-code" required autocomplete="off"></label>
+      <label>管理密码（至少 8 位）<input type="password" id="su-pass" minlength="8" required></label>
+      <label>确认密码<input type="password" id="su-pass2" required></label>
+      <p class="err" id="setup-err"></p>
+      <button type="submit">开始初始化</button>
+    </form>
+    <div id="setup-totp" class="hidden">
+      <p>用验证器 App（Google Authenticator 等）扫码，或手动输入密钥：</p>
+      <div id="qr"></div>
+      <div class="row">
+        <code id="totp-secret"></code>
+        <button type="button" id="btn-copy-secret">复制密钥</button>
+      </div>
+      <form id="form-verify">
+        <label>输入 6 位验证码完成绑定<input id="vf-code" inputmode="numeric" maxlength="6" required autocomplete="one-time-code"></label>
+        <p class="err" id="verify-err"></p>
+        <button type="submit">验证并进入</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- 登录 -->
+  <section id="view-login" class="hidden">
+    <h2>登录</h2>
+    <form id="form-login">
+      <label>密码<input type="password" id="li-pass" required></label>
+      <label>TOTP 验证码<input id="li-code" inputmode="numeric" maxlength="6" required autocomplete="one-time-code"></label>
+      <p class="err" id="login-err"></p>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+
+  <!-- 主面板 -->
+  <section id="view-panel" class="hidden">
+    <nav id="tabs">
+      <button data-tab="subs" class="on">订阅</button>
+      <button data-tab="nodes">自建节点</button>
+      <button data-tab="links">输出链接</button>
+    </nav>
+
+    <div id="tab-subs">
+      <div class="toolbar">
+        <button id="btn-refresh-all">立即刷新全部</button>
+        <button id="btn-add-sub">新增订阅</button>
+      </div>
+      <div id="sub-list"></div>
+    </div>
+
+    <div id="tab-nodes" class="hidden">
+      <p class="dim">粘贴标准节点 URI（ss:// vmess:// vless:// trojan:// hy2:// tuic://），每行一个。与机场节点同模型合并输出。</p>
+      <textarea id="node-uris" placeholder="vless://…&#10;trojan://…"></textarea>
+      <div class="toolbar">
+        <button id="btn-add-nodes">解析并添加</button>
+      </div>
+      <p class="err" id="node-msg"></p>
+      <div id="node-list"></div>
+    </div>
+
+    <div id="tab-links" class="hidden">
+      <div class="toolbar">
+        <button id="btn-add-link">新增链接</button>
+      </div>
+      <div id="link-list"></div>
+    </div>
+  </section>
+</main>
+
+<!-- 节点查看 -->
+<dialog id="dlg-nodes">
+  <h3 id="nodes-title">节点</h3>
+  <input id="nodes-filter" placeholder="正则筛选节点名，如 香港|HK|🇭🇰（留空显示全部）">
+  <p class="dim" id="nodes-count"></p>
+  <p class="err" id="nodes-err"></p>
+  <div id="nodes-list"></div>
+  <div class="actions">
+    <button type="button" id="nodes-close">关闭</button>
+  </div>
+</dialog>
+
+<!-- 订阅表单 -->
+<dialog id="dlg-sub">
+  <h3 id="sub-title">新增订阅</h3>
+  <p class="err" id="sub-err"></p>
+  <form id="form-sub">
+    <label>名称<input id="sub-name" required></label>
+    <label>订阅 URL（含 token，AES-GCM 加密保存，不再回显）<input id="sub-url" placeholder="https://…（编辑时留空表示不修改）"></label>
+    <label>自定义 User-Agent（可选，留空使用默认 v2rayN UA）<input id="sub-ua"></label>
+    <label>抓取格式
+      <select id="sub-format">
+        <option value="base64">base64 / URI（轻解析，推荐）</option>
+        <option value="clash">Clash YAML（机场只提供 Clash 订阅时使用）</option>
+      </select>
+    </label>
+    <label class="chk"><input id="sub-enabled" type="checkbox" checked> 启用</label>
+    <div class="actions">
+      <button type="button" id="sub-cancel">取消</button>
+      <button type="submit">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 链接表单 -->
+<dialog id="dlg-link">
+  <h3 id="link-title">新增链接</h3>
+  <p class="err" id="link-err"></p>
+  <form id="form-link">
+    <label>标签<input id="link-label" required></label>
+    <label>默认格式
+      <select id="link-target">
+        <option value="clash">Clash (Mihomo YAML)</option>
+        <option value="singbox">sing-box</option>
+        <option value="base64">base64</option>
+        <option value="uri">URI 列表</option>
+      </select>
+    </label>
+    <label>规则
+      <select id="link-rules">
+        <option value="none">仅代理（不做分流）</option>
+        <option value="cn">绕过中国直连，其余代理</option>
+      </select>
+    </label>
+    <label id="rsource-row">规则数据源（.srs 下载地址）
+      <select id="link-rsource">
+        <option value="official">SagerNet 官方</option>
+        <option value="jsdelivr">jsDelivr 镜像</option>
+      </select>
+    </label>
+    <label>包含来源</label>
+    <div id="link-sources"></div>
+    <label class="chk"><input id="link-custom" type="checkbox" checked> 自建节点</label>
+    <label>节点名包含正则（可选，匹配含 [来源] 前缀的完整节点名，留空不过滤）<input id="link-include" placeholder="如 香港|HK|🇭🇰"></label>
+    <label>节点名排除正则（可选）<input id="link-exclude" placeholder="如 公告|频道|到期|提示"></label>
+    <label class="chk"><input id="link-enabled" type="checkbox" checked> 启用</label>
+    <div class="actions">
+      <button type="button" id="link-cancel">取消</button>
+      <button type="submit">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/vendor/qrcode.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

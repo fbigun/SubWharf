@@ -1,0 +1,3 @@
+SESSION_KEY=change-me-random-session-key
+WRAP_KEY=change-me-random-wrap-key
+SETUP_CODE=change-me-init-code

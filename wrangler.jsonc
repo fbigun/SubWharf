@@ -1,0 +1,18 @@
+{
+  // SubWharf：KV 快照存储 + 每日两次抓取（UTC 1:00/13:00 = 北京 09:00/21:00）
+  // secrets：npx wrangler secret put SESSION_KEY|WRAP_KEY|SETUP_CODE
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "subwharf",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "triggers": {
+    "crons": ["0 1,13 * * *"]
+  },
+  "kv_namespaces": [
+    { "binding": "KV", "id": "d3f4c9e06ef04b5692619f870142e394" }
+  ]
+}
