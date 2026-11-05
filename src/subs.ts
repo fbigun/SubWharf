@@ -277,11 +277,13 @@ function normalizeLink(input: LinkInput, prev?: LinkRec): LinkRec {
   const include = input.include !== undefined ? input.include.trim() || undefined : prev?.include;
   const exclude = input.exclude !== undefined ? input.exclude.trim() || undefined : prev?.exclude;
   const templateId =
-    input.templateId !== undefined
-      ? typeof input.templateId === 'string'
-        ? input.templateId.trim() || undefined
-        : undefined
-      : prev?.templateId;
+    target === 'singbox'
+      ? input.templateId !== undefined
+        ? typeof input.templateId === 'string'
+          ? input.templateId.trim() || undefined
+          : undefined
+        : prev?.templateId
+      : undefined;
   return {
     token: prev?.token ?? '',
     label: (input.label ?? prev?.label ?? '').trim() || '默认链接',

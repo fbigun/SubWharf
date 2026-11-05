@@ -475,13 +475,14 @@ function renderLinks() {
   el.innerHTML = state.links
     .map((l) => {
       const filt = [l.include ? `含 ${l.include}` : '', l.exclude ? `排除 ${l.exclude}` : ''].filter(Boolean).join('，');
-      const tplName = l.templateId ? state.templates.find((t) => t.id === l.templateId)?.name ?? '模板已删除' : '';
+      const tplName = l.target === 'singbox' && l.templateId ? state.templates.find((t) => t.id === l.templateId)?.name ?? '模板已删除' : '';
+      const rulesBadge = tplName ? '' : `<span class="badge">${l.rules === 'cn' ? '绕华直连' : '纯代理'}</span>`;
       return `
     <div class="card" data-token="${l.token}">
       <div class="row">
         <strong>${esc(l.label)}</strong>
         <span class="badge">${l.target}</span>
-        <span class="badge">${l.rules === 'cn' ? '绕华直连' : '纯代理'}</span>
+        ${rulesBadge}
         ${tplName ? `<span class="badge">模板：${esc(tplName)}</span>` : ''}
         <span class="badge ${l.enabled ? 'ok' : 'off'}">${l.enabled ? '启用' : '停用'}</span>
         <span class="grow"></span>
@@ -491,7 +492,7 @@ function renderLinks() {
         <button data-act="toggle">${l.enabled ? '停用' : '启用'}</button>
         <button data-act="del" class="danger">删除</button>
       </div>
-      <div class="row dim">来源：${esc(sourceNames(l))}${filt ? ` · 筛选：${esc(filt)}` : ''} · 支持 ?target=clash|singbox|base64|uri&amp;rules=cn|none 覆盖</div>
+      <div class="row dim">来源：${esc(sourceNames(l))}${filt ? ` · 筛选：${esc(filt)}` : ''} · 支持 ?target=clash|singbox|base64|uri&amp;rules=cn|none 覆盖${tplName ? ' · 模板输出忽略 rules' : ''}</div>
       <div class="row"><code class="grow">${esc(linkUrl(l))}</code></div>
     </div>`;
     })
@@ -563,15 +564,22 @@ function openLinkDialog(l) {
     '<option value="">不使用（内置最小配置）</option>' +
     state.templates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
   $('#link-template').value = l?.templateId ?? '';
-  toggleRsource();
+  toggleLinkFields();
   $('#dlg-link').showModal();
 }
 
-function toggleRsource() {
-  $('#rsource-row').classList.toggle('hidden', $('#link-rules').value !== 'cn');
+function toggleLinkFields() {
+  const singbox = $('#link-target').value === 'singbox';
+  const tplBound = singbox && $('#link-template').value !== '';
+  $('#link-template-row').classList.toggle('hidden', !singbox);
+  // 模板自带 route，绑定模板后不再暴露链接规则
+  $('#link-rules-row').classList.toggle('hidden', tplBound);
+  $('#rsource-row').classList.toggle('hidden', tplBound || $('#link-rules').value !== 'cn');
 }
 
-$('#link-rules').addEventListener('change', toggleRsource);
+$('#link-target').addEventListener('change', toggleLinkFields);
+$('#link-template').addEventListener('change', toggleLinkFields);
+$('#link-rules').addEventListener('change', toggleLinkFields);
 $('#btn-add-link').addEventListener('click', () => openLinkDialog(null));
 
 $('#form-link').addEventListener('submit', async (e) => {
@@ -587,7 +595,7 @@ $('#form-link').addEventListener('submit', async (e) => {
     enabled: $('#link-enabled').checked,
     include: $('#link-include').value,
     exclude: $('#link-exclude').value,
-    templateId: $('#link-template').value,
+    templateId: $('#link-target').value === 'singbox' ? $('#link-template').value : '',
   };
   for (const [key, label] of [['include', '包含正则'], ['exclude', '排除正则']]) {
     const v = body[key].trim();
