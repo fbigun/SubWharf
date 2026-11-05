@@ -142,7 +142,7 @@ function sbTransport(n: ProxyNode): Record<string, unknown> | undefined {
   return { type: 'httpupgrade', path: n.wsPath || '/', host: n.wsHost ? [n.wsHost] : undefined };
 }
 
-function sbOutbound(n: ProxyNode): Record<string, unknown> {
+export function singboxOutbound(n: ProxyNode): Record<string, unknown> {
   const o: Record<string, unknown> = { type: n.type, tag: n.name, server: n.server, server_port: n.port };
   if (n.type === 'ss') {
     o.method = n.cipher || 'aes-128-gcm';
@@ -184,7 +184,7 @@ export function renderSingbox(nodes: ProxyNode[], rules: RulesMode, ruleSource: 
   const config: Record<string, unknown> = {
     log: { level: 'info', timestamp: true },
     inbounds: [{ type: 'mixed', tag: 'mixed-in', listen: '127.0.0.1', listen_port: 7890 }],
-    outbounds: [{ type: 'selector', tag: 'PROXY', outbounds: selectorOutbounds }, ...nodes.map(sbOutbound), ...(directNeeded ? [{ type: 'direct', tag: 'direct' }] : [])],
+    outbounds: [{ type: 'selector', tag: 'PROXY', outbounds: selectorOutbounds }, ...nodes.map(singboxOutbound), ...(directNeeded ? [{ type: 'direct', tag: 'direct' }] : [])],
     route: { auto_detect_interface: true, final: 'PROXY' },
   };
   if (rules === 'cn') {

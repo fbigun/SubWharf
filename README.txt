@@ -9,7 +9,9 @@ SubWharf 是部署在 Cloudflare Workers 上的个人订阅中转与管理面板
 
 定位与边界：
   * 只输出节点，不输出机场原有的 rules / proxy-groups / rule-providers。
-  * 唯一例外：可选的「绕过中国直连、其余走代理」最小规则。
+  * 例外一：可选的「绕过中国直连、其余走代理」最小规则。
+  * 例外二：用户显式配置的 singbox 模板，保留其 inbounds / DNS /
+    route / 分组（模板由用户提供，非机场配置透传）。
   * 输出格式必选：Clash(Mihomo YAML) 与 sing-box；另附 base64 / uri。
   * 单管理员 + TOTP 双因子，不开放多用户注册。
   * 全部功能设计在 Cloudflare 免费额度内运行。
@@ -22,7 +24,8 @@ SubWharf 是部署在 Cloudflare Workers 上的个人订阅中转与管理面板
   /s/{token}  公开订阅输出（无需登录，凭 token 取内容）
 
 定时任务：Cron Trigger「0 1,13 * * *」（UTC，即北京 09:00 / 21:00）
-每天两次抓取全部启用订阅，写快照入 KV；面板可手动立即刷新。
+每天两次抓取全部启用订阅，写快照入 KV；同时重新拉取输出模板并为每个
+输出链接重建模板配置；面板可手动立即刷新。
 
   浏览器 ──HTTPS──> 静态面板 + /api/*
   Cron   ──触发──> 抓取机场订阅(自定义 UA) ──解析──> KV 快照
@@ -64,12 +67,13 @@ SubWharf 是部署在 Cloudflare Workers 上的个人订阅中转与管理面板
 
 5. 对外输出链接
    - 链接模型：128-bit 随机 token、标签、默认 target、是否内置绕华
-     规则、来源勾选（哪些机场 + 是否含自建）、启停 / 一键重置。
+     规则、来源勾选（哪些机场 + 是否含自建）、绑定模板、启停 / 一键重置。
    - GET /s/{token}?target=clash|singbox|base64|uri&rules=cn
      参数可覆盖链接默认值；响应带 profile-update-interval: 12。
    - target=clash   Mihomo YAML：仅 proxies + 单一 PROXY 组。
-   - target=singbox 完整最小配置：inbounds(mixed) + outbounds
-                     (PROXY 选择器 + 全部节点) + route.final -> PROXY。
+   - target=singbox 未配置模板时为完整最小配置：inbounds(mixed) +
+                     outbounds (PROXY 选择器 + 全部节点) + route.final ->
+                     PROXY；配置模板后改用模板生成结果（见下条）。
    - rules=cn 绕华规则：
        clash：GEOIP,PRIVATE,DIRECT,no-resolve / GEOSITE,CN,DIRECT /
               GEOIP,CN,DIRECT / MATCH,PROXY
@@ -77,6 +81,21 @@ SubWharf 是部署在 Cloudflare Workers 上的个人订阅中转与管理面板
               直连，final -> PROXY（.srs 取 SagerNet 官方地址，可切换
               jsDelivr 镜像；服务端不内置任何规则数据）。
    - base64 / uri 为附加格式（内部模型副产品，v2rayN 系可用）。
+
+6. 输出模板（sing-box）
+   - 面板「模板」Tab 维护多个模板（名称 + JSON 地址，CNB 文件页 /-/blob/
+     地址自动转为 /-/git/raw/）；输出链接绑定其中一个模板，未绑定的链接
+     使用内置最小配置。
+   - 拉取后保留模板的 inbounds / DNS / route / rule_set，将绑定链接的节点
+     注入 outbounds。
+   - 分组填充沿用模板脚本语义：香港 / 日本 / 美国分组按节点名正则匹配，
+     自动选择 / 手动切换填全部节点；无匹配或模板留空的分组回退到共享的
+     COMPATIBLE 直连出口；已有静态成员的分组保持不变。
+   - 生成结果按输出链接（token）缓存在 KV，客户端拉取时直接返回；
+     模板输出以模板 route 为准，忽略链接规则选项与 ?rules 参数。
+   - 控制台支持单个模板刷新 / 刷新全部模板 / 编辑 / 删除；cron 每天两次
+     重新拉取全部模板并重建绑定链接的缓存，拉取失败保留上次成功模板；
+     删除模板会解除链接绑定并清除对应缓存。
 
 四、KV 数据模型
 ----------------------------------------------------------------------
@@ -86,7 +105,9 @@ SubWharf 是部署在 Cloudflare Workers 上的个人订阅中转与管理面板
   sub:{id}       订阅元数据（URL 加密）                  面板操作
   snap:{subId}   快照：节点 JSON、userinfo、时间、错误    cron/手动刷新
   node:{id}      自建节点                                面板操作
-  link:{token}   输出链接配置                            面板操作
+  link:{token}   输出链接配置（含模板绑定）              面板操作
+  template:{id}  模板名称、地址、原文、拉取时间/错误     面板/cron
+  tpl:{token}    模板生成结果（config JSON）              面板/cron/按需
 
 五、部署
 ----------------------------------------------------------------------
@@ -158,6 +179,7 @@ Fork 部署清单（fork 后按自己账号部署）：
     src/index.ts  路由入口
     src/auth.ts   认证与会话
     src/subs.ts   订阅/节点/链接管理与抓取调度
+    src/template.ts 模板拉取、节点注入与按链接缓存
     src/parse.ts  订阅解析（URI / Clash / sing-box -> 内部模型）
     src/rename.ts 节点名清洗（地区识别、倍率与标识保留）
     src/render.ts 输出序列化（内部模型 -> clash / singbox / base64 / uri）

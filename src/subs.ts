@@ -45,6 +45,7 @@ export interface LinkRec {
   createdAt: number;
   include?: string; // 节点名包含正则（匹配含 [来源] 前缀的完整名），留空不过滤
   exclude?: string; // 节点名排除正则
+  templateId?: string; // 绑定的输出模板；缺省使用内置最小配置
 }
 
 export interface SnapshotRec {
@@ -255,6 +256,7 @@ export interface LinkInput {
   enabled?: boolean;
   include?: string;
   exclude?: string;
+  templateId?: string | null;
 }
 
 export async function listLinks(env: Env): Promise<LinkRec[]> {
@@ -274,6 +276,12 @@ function normalizeLink(input: LinkInput, prev?: LinkRec): LinkRec {
   const sources = Array.isArray(input.sources) ? input.sources.filter((s) => typeof s === 'string') : prev?.sources ?? [];
   const include = input.include !== undefined ? input.include.trim() || undefined : prev?.include;
   const exclude = input.exclude !== undefined ? input.exclude.trim() || undefined : prev?.exclude;
+  const templateId =
+    input.templateId !== undefined
+      ? typeof input.templateId === 'string'
+        ? input.templateId.trim() || undefined
+        : undefined
+      : prev?.templateId;
   return {
     token: prev?.token ?? '',
     label: (input.label ?? prev?.label ?? '').trim() || '默认链接',
@@ -286,6 +294,7 @@ function normalizeLink(input: LinkInput, prev?: LinkRec): LinkRec {
     createdAt: prev?.createdAt ?? 0,
     include,
     exclude,
+    templateId,
   };
 }
 
@@ -318,6 +327,15 @@ export async function resetLinkToken(env: Env, token: string): Promise<LinkRec |
 
 export async function deleteLink(env: Env, token: string): Promise<void> {
   await env.KV.delete(`link:${token}`);
+}
+
+/** 模板删除时解除链接绑定；token 不存在则忽略 */
+export async function setLinkTemplate(env: Env, token: string, templateId?: string): Promise<void> {
+  const rec = await getLink(env, token);
+  if (!rec) return;
+  if (templateId) rec.templateId = templateId;
+  else delete rec.templateId;
+  await putJson(env, `link:${token}`, rec);
 }
 
 // ---------- 节点汇总 ----------
