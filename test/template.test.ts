@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Env } from '../src/auth';
 import type { ProxyNode } from '../src/parse';
-import { getLink, type LinkRec } from '../src/subs';
+import { createLink, getLink, type LinkRec } from '../src/subs';
 import {
   buildTemplateConfig,
   createTemplate,
@@ -218,5 +218,19 @@ describe('多模板绑定与缓存', () => {
     const rec = await createTemplate(env, { name: '  ', url: 'https://cnb.cool/o/r/-/blob/main/t.json' });
     expect(rec.name).toBe('未命名模板');
     expect(rec.url).toBe('https://cnb.cool/o/r/-/git/raw/main/t.json');
+  });
+
+  it('仅 singbox 链接保留模板绑定', async () => {
+    const { env } = kvStub({});
+    const clash = await createLink(env, { label: 'c', target: 'clash', templateId: 't1' });
+    expect(clash.templateId).toBeUndefined();
+    const singbox = await createLink(env, { label: 's', target: 'singbox', templateId: 't1' });
+    expect(singbox.templateId).toBe('t1');
+  });
+
+  it('非 singbox 链接不生成模板缓存', async () => {
+    const { env } = kvStub({ 'link:x': { ...linkRec('x', 't1'), target: 'clash' }, 'template:t1': tplRec('t1', 'A') });
+    expect(await renderAll(env)).toBe(0);
+    expect(await getOutput(env, 'x')).toBeNull();
   });
 });

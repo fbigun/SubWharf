@@ -67,7 +67,8 @@ SubWharf 是部署在 Cloudflare Workers 上的个人订阅中转与管理面板
 
 5. 对外输出链接
    - 链接模型：128-bit 随机 token、标签、默认 target、是否内置绕华
-     规则、来源勾选（哪些机场 + 是否含自建）、绑定模板、启停 / 一键重置。
+     规则、来源勾选（哪些机场 + 是否含自建）、绑定模板（仅 singbox）、
+     启停 / 一键重置。
    - GET /s/{token}?target=clash|singbox|base64|uri&rules=cn
      参数可覆盖链接默认值；响应带 profile-update-interval: 12。
    - target=clash   Mihomo YAML：仅 proxies + 单一 PROXY 组。
@@ -84,8 +85,8 @@ SubWharf 是部署在 Cloudflare Workers 上的个人订阅中转与管理面板
 
 6. 输出模板（sing-box）
    - 面板「模板」Tab 维护多个模板（名称 + JSON 地址，CNB 文件页 /-/blob/
-     地址自动转为 /-/git/raw/）；输出链接绑定其中一个模板，未绑定的链接
-     使用内置最小配置。
+     地址自动转为 /-/git/raw/）；仅 singbox 格式的输出链接可绑定模板，
+     未绑定或非 singbox 链接使用对应格式的内置输出。
    - 拉取后保留模板的 inbounds / DNS / route / rule_set，将绑定链接的节点
      注入 outbounds。
    - 分组填充沿用模板脚本语义：香港 / 日本 / 美国分组按节点名正则匹配，
