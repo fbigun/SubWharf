@@ -142,8 +142,18 @@ function sbTransport(n: ProxyNode): Record<string, unknown> | undefined {
   return { type: 'httpupgrade', path: n.wsPath || '/', host: n.wsHost ? [n.wsHost] : undefined };
 }
 
+// singbox 出站类型名与内部模型不同：ss → shadowsocks
+const SINGBOX_TYPE: Record<ProxyNode['type'], string> = {
+  ss: 'shadowsocks',
+  vmess: 'vmess',
+  vless: 'vless',
+  trojan: 'trojan',
+  hysteria2: 'hysteria2',
+  tuic: 'tuic',
+};
+
 export function singboxOutbound(n: ProxyNode): Record<string, unknown> {
-  const o: Record<string, unknown> = { type: n.type, tag: n.name, server: n.server, server_port: n.port };
+  const o: Record<string, unknown> = { type: SINGBOX_TYPE[n.type], tag: n.name, server: n.server, server_port: n.port };
   if (n.type === 'ss') {
     o.method = n.cipher || 'aes-128-gcm';
     o.password = n.password || '';

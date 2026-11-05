@@ -57,7 +57,7 @@ describe('buildTemplateConfig', () => {
     expect(byTag(cfg, '🚀 节点选择').outbounds).toEqual(['🔯 香港节点', '🔴 日本节点', '✨ 美国节点', '♻️ 自动选择', '🐸 手动切换']);
 
     const injected = byTag(cfg, '[机场A] 香港 01');
-    expect(injected).toMatchObject({ type: 'ss', server: 's.example.com', server_port: 8388, method: 'aes-128-gcm', password: 'pw' });
+    expect(injected).toMatchObject({ type: 'shadowsocks', server: 's.example.com', server_port: 8388, method: 'aes-128-gcm', password: 'pw' });
   });
 
   it('地区无匹配节点时回退 COMPATIBLE，且只创建一个直连出口', () => {

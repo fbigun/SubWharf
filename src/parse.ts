@@ -484,7 +484,8 @@ function mapSingboxOutbound(o: any, type: string, tag: string): ProxyNode {
   };
 
   switch (type) {
-    case 'ss': {
+    case 'ss':
+    case 'shadowsocks': {
       const n: ProxyNode = { ...base, type: 'ss', cipher: String(o.method ?? ''), password: String(o.password ?? '') };
       if (o.plugin) {
         if (o.plugin !== 'obfs-local' && o.plugin !== 'simple-obfs') throw new Error(`不支持的 ss plugin ${o.plugin}`);

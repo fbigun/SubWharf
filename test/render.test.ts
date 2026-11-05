@@ -77,7 +77,8 @@ describe('renderSingbox', () => {
     expect(cfg.route).toMatchObject({ final: 'PROXY' });
     expect(cfg.outbounds.filter((o: any) => o.type === 'direct')).toHaveLength(0);
     const byTag = Object.fromEntries(cfg.outbounds.slice(1).map((o: any) => [o.tag, o]));
-    expect(byTag['SS-基础']).toMatchObject({ method: 'aes-256-gcm', password: 'p@ss:-word', server_port: 8388 });
+    expect(byTag['SS-基础']).toMatchObject({ type: 'shadowsocks', method: 'aes-256-gcm', password: 'p@ss:-word', server_port: 8388 });
+    expect(cfg.outbounds.filter((o: any) => o.type === 'ss')).toHaveLength(0);
     expect(byTag['VM-WS']).toMatchObject({ uuid: 'u1', security: 'auto', alter_id: 0, tls: { enabled: true, server_name: 'b.com' }, transport: { type: 'ws', path: '/ws', headers: { Host: 'b.com' } } });
     expect(byTag['VLESS-Reality']).toMatchObject({ flow: 'xtls-rprx-vision', tls: { reality: { enabled: true, public_key: 'PBK', short_id: 'abcd' }, utls: { fingerprint: 'chrome' } } });
     expect(byTag['HY2-OBFS']).toMatchObject({ obfs: { type: 'salamander', password: 'op' }, up_mbps: 30, down_mbps: 200 });
