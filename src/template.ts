@@ -236,7 +236,7 @@ async function renderWith(env: Env, link: LinkRec, template: TemplateRec): Promi
 }
 
 export async function renderLink(env: Env, link: LinkRec): Promise<TemplateOutput | null> {
-  if (!link.templateId) return null;
+  if (link.target !== 'singbox' || !link.templateId) return null;
   const template = await getTemplate(env, link.templateId);
   return template ? renderWith(env, link, template) : null;
 }
@@ -246,7 +246,7 @@ export async function renderAll(env: Env): Promise<number> {
   const templates = new Map((await listTemplates(env)).map((t) => [t.id, t]));
   let rendered = 0;
   for (const link of await listLinks(env)) {
-    if (!link.enabled || !link.templateId) continue;
+    if (!link.enabled || link.target !== 'singbox' || !link.templateId) continue;
     const template = templates.get(link.templateId);
     if (!template?.text) continue;
     try {
@@ -271,7 +271,7 @@ export async function getOutput(env: Env, token: string): Promise<TemplateOutput
 
 /** 拉取时优先读缓存；缓存缺失或模板已切换时按需生成 */
 export async function ensureOutput(env: Env, link: LinkRec): Promise<TemplateOutput | null> {
-  if (!link.templateId) return null;
+  if (link.target !== 'singbox' || !link.templateId) return null;
   const cached = await getOutput(env, link.token);
   if (cached?.templateId === link.templateId) return cached;
   return renderLink(env, link);
@@ -287,7 +287,7 @@ export async function templateStatuses(env: Env): Promise<TemplateStatus[]> {
   for (const t of await listTemplates(env)) {
     const outputs: TemplateOutputStatus[] = [];
     for (const link of links) {
-      if (link.templateId !== t.id) continue;
+      if (link.templateId !== t.id || link.target !== 'singbox') continue;
       const cached = await getOutput(env, link.token);
       outputs.push({ token: link.token, label: link.label, generatedAt: cached?.generatedAt, nodeCount: cached?.nodeCount });
     }

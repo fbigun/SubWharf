@@ -97,9 +97,9 @@
 
     <div id="tab-template" class="hidden">
       <p class="dim">
-        维护多个 sing-box 模板，在输出链接里选择绑定哪个模板。生成时保留模板的 inbounds、DNS、路由与分组，
+        维护多个 sing-box 模板，在 singbox 格式的输出链接里选择绑定。生成时保留模板的 inbounds、DNS、路由与分组，
         注入该链接的节点并按分组 tag 填充（香港 / 日本 / 美国 / 自动选择 / 手动切换，空分组回退 COMPATIBLE）。
-        结果按链接缓存在 KV，客户端拉取时直接返回；模板输出以模板路由为准，忽略链接的规则选项与 ?rules 参数。
+        结果按链接缓存在 KV，客户端拉取时直接返回；绑定模板后规则由模板决定，链接里的规则选项不生效。
       </p>
       <div class="toolbar">
         <button id="btn-add-template">新增模板</button>
@@ -163,12 +163,12 @@
         <option value="uri">URI 列表</option>
       </select>
     </label>
-    <label>输出模板（singbox 输出使用）
+    <label id="link-template-row">输出模板（仅 singbox 格式）
       <select id="link-template">
         <option value="">不使用（内置最小配置）</option>
       </select>
     </label>
-    <label>规则
+    <label id="link-rules-row">规则
       <select id="link-rules">
         <option value="none">仅代理（不做分流）</option>
         <option value="cn">绕过中国直连，其余代理</option>
