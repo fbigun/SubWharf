@@ -21,6 +21,7 @@ export interface TemplateOutput {
   generatedAt: number;
   nodeCount: number;
   templateId: string;
+  version: number;
 }
 
 export interface TemplateOutputStatus {
@@ -46,6 +47,8 @@ const OUTPUT_PREFIX = 'tpl:';
 const tkey = (id: string) => `${PREFIX}${id}`;
 const outputKey = (token: string) => `${OUTPUT_PREFIX}${token}`;
 const TEMPLATE_UA = 'SubWharf/1.0';
+// 输出序列化变更时递增：旧缓存按未命中处理，首次拉取自动重建
+const RENDER_VERSION = 1;
 
 // 地区分组识别与空分组兜底，语义与 Sub-Store 模板脚本一致
 const REGION_TAGS = [/港|hk|hongkong|kong kong|🇭🇰/i, /日本|jp|japan|🇯🇵/i, /美|us|unitedstates|united states|🇺🇸/i];
@@ -230,6 +233,7 @@ async function renderWith(env: Env, link: LinkRec, template: TemplateRec): Promi
     generatedAt: Date.now(),
     nodeCount: nodes.length,
     templateId: template.id,
+    version: RENDER_VERSION,
   };
   await env.KV.put(outputKey(link.token), JSON.stringify(out));
   return out;
@@ -273,7 +277,7 @@ export async function getOutput(env: Env, token: string): Promise<TemplateOutput
 export async function ensureOutput(env: Env, link: LinkRec): Promise<TemplateOutput | null> {
   if (link.target !== 'singbox' || !link.templateId) return null;
   const cached = await getOutput(env, link.token);
-  if (cached?.templateId === link.templateId) return cached;
+  if (cached?.templateId === link.templateId && cached.version === RENDER_VERSION) return cached;
   return renderLink(env, link);
 }
 
