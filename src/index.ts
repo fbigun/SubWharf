@@ -18,6 +18,7 @@ import {
   wrapField,
 } from './auth';
 import * as subs from './subs';
+import * as tpl from './template';
 import { renderBase64, renderClash, renderSingbox, renderUri, type OutputTarget, type RuleSource, type RulesMode } from './render';
 
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -33,9 +34,24 @@ export default {
     }
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(subs.refreshAll(env));
+    ctx.waitUntil(refreshAllAndTemplate(env));
   },
 };
+
+async function refreshAllAndTemplate(env: Env): Promise<void> {
+  await subs.refreshAll(env);
+  await tpl.refreshTemplates(env);
+  await tpl.renderAll(env);
+}
+
+/** 订阅/链接/节点变更后重渲染模板缓存；失败不阻断主操作，拉取时会按需重建 */
+async function syncTemplate(env: Env): Promise<void> {
+  try {
+    await tpl.renderAll(env);
+  } catch {
+    // 模板缓存是加速副本，读取端有按需重建兜底
+  }
+}
 
 async function handle(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
@@ -59,23 +75,27 @@ async function serveSubscription(env: Env, url: URL): Promise<Response> {
   const rules: RulesMode = qRules === 'cn' || qRules === 'none' ? qRules : link.rules;
   const ruleSource: RuleSource = link.ruleSource === 'jsdelivr' ? 'jsdelivr' : 'official';
 
-  const { nodes } = await subs.collectNodes(env, link);
   const headers: Record<string, string> = { 'profile-update-interval': '12', 'Cache-Control': 'no-store' };
   let body: string;
-  if (target === 'clash') {
-    body = renderClash(nodes, rules);
-    headers['Content-Type'] = 'text/yaml; charset=utf-8';
-    headers['Content-Disposition'] = 'attachment; filename="config.yaml"';
-  } else if (target === 'singbox') {
-    body = renderSingbox(nodes, rules, ruleSource);
+  if (target === 'singbox') {
+    // 配置模板后直接返回 KV 中的生成结果；未配置时沿用内置最小配置
+    const cached = await tpl.ensureOutput(env, link);
+    body = cached ? cached.config : renderSingbox((await subs.collectNodes(env, link)).nodes, rules, ruleSource);
     headers['Content-Type'] = 'application/json; charset=utf-8';
     headers['Content-Disposition'] = 'attachment; filename="config.json"';
-  } else if (target === 'uri') {
-    body = renderUri(nodes);
-    headers['Content-Type'] = 'text/plain; charset=utf-8';
   } else {
-    body = renderBase64(nodes);
-    headers['Content-Type'] = 'text/plain; charset=utf-8';
+    const { nodes } = await subs.collectNodes(env, link);
+    if (target === 'clash') {
+      body = renderClash(nodes, rules);
+      headers['Content-Type'] = 'text/yaml; charset=utf-8';
+      headers['Content-Disposition'] = 'attachment; filename="config.yaml"';
+    } else if (target === 'uri') {
+      body = renderUri(nodes);
+      headers['Content-Type'] = 'text/plain; charset=utf-8';
+    } else {
+      body = renderBase64(nodes);
+      headers['Content-Type'] = 'text/plain; charset=utf-8';
+    }
   }
   return new Response(body, { headers });
 }
@@ -116,7 +136,60 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
 
   if (p === '/api/refresh-all' && method === 'POST') {
     await subs.refreshAll(env);
+    await syncTemplate(env);
     return json(await statusPayload(env));
+  }
+
+  if (p === '/api/templates' && method === 'GET') return json({ templates: await tpl.templateStatuses(env) });
+
+  if (p === '/api/templates' && method === 'POST') {
+    const b = await readJson(req);
+    if (typeof b?.name !== 'string' || !b.name.trim()) return err('缺少模板名称');
+    if (typeof b?.url !== 'string' || !b.url.trim()) return err('缺少模板地址');
+    let rec: tpl.TemplateRec;
+    try {
+      rec = await tpl.createTemplate(env, { name: b.name, url: b.url });
+    } catch {
+      return err('模板地址无效');
+    }
+    await tpl.refreshTemplate(env, rec.id);
+    await tpl.renderAll(env);
+    return json({ templates: await tpl.templateStatuses(env) });
+  }
+
+  if (p === '/api/templates/refresh' && method === 'POST') {
+    await tpl.refreshTemplates(env);
+    await tpl.renderAll(env);
+    return json({ templates: await tpl.templateStatuses(env) });
+  }
+
+  if (seg[1] === 'templates' && seg.length === 3) {
+    if (method === 'PUT') {
+      const b = await readJson(req);
+      let rec: tpl.TemplateRec | null;
+      try {
+        rec = await tpl.updateTemplate(env, seg[2], {
+          name: typeof b?.name === 'string' ? b.name : undefined,
+          url: typeof b?.url === 'string' && b.url.trim() ? b.url : undefined,
+        });
+      } catch {
+        return err('模板地址无效');
+      }
+      if (!rec) return err('模板不存在', 404);
+      if (typeof b?.url === 'string' && b.url.trim()) await tpl.refreshTemplate(env, rec.id);
+      await tpl.renderAll(env);
+      return json({ templates: await tpl.templateStatuses(env) });
+    }
+    if (method === 'DELETE') {
+      if (!(await tpl.deleteTemplate(env, seg[2]))) return err('模板不存在', 404);
+      return json({ templates: await tpl.templateStatuses(env) });
+    }
+  }
+
+  if (seg[1] === 'templates' && seg.length === 4 && seg[3] === 'refresh' && method === 'POST') {
+    if (!(await tpl.refreshTemplate(env, seg[2]))) return err('模板不存在', 404);
+    await tpl.renderAll(env);
+    return json({ templates: await tpl.templateStatuses(env) });
   }
 
   if (seg[1] === 'subs') {
@@ -144,6 +217,7 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
         enabled: b.enabled,
       });
       const snap = await subs.refreshSub(env, rec); // 新增后立即抓一次
+      await syncTemplate(env);
       return json({ id: rec.id, snap: snapSummary(snap) });
     }
     if (method === 'PUT' && seg.length === 3) {
@@ -160,16 +234,20 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
         enabled: b?.enabled,
       });
       if (!rec) return err('订阅不存在', 404);
+      await syncTemplate(env);
       return json({ ok: true });
     }
     if (method === 'DELETE' && seg.length === 3) {
       await subs.deleteSub(env, seg[2]);
+      await syncTemplate(env);
       return json({ ok: true });
     }
     if (method === 'POST' && seg.length === 4 && seg[3] === 'refresh') {
       const rec = await subs.getSub(env, seg[2]);
       if (!rec) return err('订阅不存在', 404);
-      return json({ snap: snapSummary(await subs.refreshSub(env, rec)) });
+      const snap = await subs.refreshSub(env, rec);
+      await syncTemplate(env);
+      return json({ snap: snapSummary(snap) });
     }
   }
 
@@ -178,10 +256,13 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
     if (method === 'POST' && seg.length === 2) {
       const b = await readJson(req);
       if (typeof b?.uris !== 'string' || !b.uris.trim()) return err('缺少节点 URI');
-      return json(await subs.addNodes(env, b.uris));
+      const r = await subs.addNodes(env, b.uris);
+      await syncTemplate(env);
+      return json(r);
     }
     if (method === 'DELETE' && seg.length === 3) {
       await subs.deleteNode(env, seg[2]);
+      await syncTemplate(env);
       return json({ ok: true });
     }
   }
@@ -191,22 +272,31 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
     if (method === 'POST' && seg.length === 2) {
       const b = await readJson(req);
       if (invalidRegex(b?.include) || invalidRegex(b?.exclude)) return err('节点筛选正则表达式无效');
-      return json({ link: await subs.createLink(env, b ?? {}) });
+      const link = await subs.createLink(env, b ?? {});
+      await syncTemplate(env);
+      return json({ link });
     }
     if (method === 'PUT' && seg.length === 3) {
       const b = await readJson(req);
       if (invalidRegex(b?.include) || invalidRegex(b?.exclude)) return err('节点筛选正则表达式无效');
+      const before = await subs.getLink(env, seg[2]);
       const rec = await subs.updateLink(env, seg[2], b ?? {});
       if (!rec) return err('链接不存在', 404);
+      // 换绑/解绑模板后旧缓存立即失效，避免继续返回上一个模板的配置
+      if (before?.templateId !== rec.templateId) await tpl.deleteOutput(env, rec.token);
+      await syncTemplate(env);
       return json({ link: rec });
     }
     if (method === 'POST' && seg.length === 4 && seg[3] === 'reset') {
       const rec = await subs.resetLinkToken(env, seg[2]);
       if (!rec) return err('链接不存在', 404);
+      await tpl.deleteOutput(env, seg[2]);
+      await syncTemplate(env);
       return json({ link: rec });
     }
     if (method === 'DELETE' && seg.length === 3) {
       await subs.deleteLink(env, seg[2]);
+      await tpl.deleteOutput(env, seg[2]);
       return json({ ok: true });
     }
   }
