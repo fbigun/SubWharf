@@ -105,6 +105,15 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
 
   if (p === '/api/status' && method === 'GET') return json(await statusPayload(env));
 
+  if (p === '/api/pool' && method === 'GET') {
+    const pool = await subs.collectPool(env);
+    return json({
+      ...pool,
+      // 面板只需要展示字段，不回传凭据
+      nodes: pool.nodes.map(({ name, original, source, type, server, port }) => ({ name, original, source, type, server, port })),
+    });
+  }
+
   if (p === '/api/refresh-all' && method === 'POST') {
     await subs.refreshAll(env);
     return json(await statusPayload(env));
@@ -123,11 +132,15 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
     if (method === 'POST' && seg.length === 2) {
       const b = await readJson(req);
       if (typeof b?.url !== 'string' || !b.url.trim()) return err('缺少订阅 URL');
+      if (invalidRegex(b?.include) || invalidRegex(b?.exclude)) return err('节点筛选正则表达式无效');
       const rec = await subs.createSub(env, {
         name: String(b.name ?? ''),
         url: b.url,
         ua: b.ua ? String(b.ua) : undefined,
         format: b.format,
+        include: typeof b.include === 'string' ? b.include : undefined,
+        exclude: typeof b.exclude === 'string' ? b.exclude : undefined,
+        clean: typeof b.clean === 'boolean' ? b.clean : undefined,
         enabled: b.enabled,
       });
       const snap = await subs.refreshSub(env, rec); // 新增后立即抓一次
@@ -135,11 +148,15 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
     }
     if (method === 'PUT' && seg.length === 3) {
       const b = await readJson(req);
+      if (invalidRegex(b?.include) || invalidRegex(b?.exclude)) return err('节点筛选正则表达式无效');
       const rec = await subs.updateSub(env, seg[2], {
         name: b?.name,
         url: b?.url,
         ua: b?.ua,
         format: b?.format,
+        include: typeof b?.include === 'string' ? b.include : undefined,
+        exclude: typeof b?.exclude === 'string' ? b.exclude : undefined,
+        clean: typeof b?.clean === 'boolean' ? b.clean : undefined,
         enabled: b?.enabled,
       });
       if (!rec) return err('订阅不存在', 404);
@@ -235,6 +252,9 @@ async function statusPayload(env: Env) {
       name: s.name,
       ua: s.ua,
       format: s.format ?? 'base64',
+      include: s.include,
+      exclude: s.exclude,
+      clean: s.clean !== false,
       enabled: s.enabled,
       createdAt: s.createdAt,
       snap: snap ? snapSummary(snap) : null,

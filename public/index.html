@@ -55,6 +55,7 @@
   <section id="view-panel" class="hidden">
     <nav id="tabs">
       <button data-tab="subs" class="on">订阅</button>
+      <button data-tab="pool">节点池</button>
       <button data-tab="nodes">自建节点</button>
       <button data-tab="links">输出链接</button>
     </nav>
@@ -65,6 +66,15 @@
         <button id="btn-add-sub">新增订阅</button>
       </div>
       <div id="sub-list"></div>
+    </div>
+
+    <div id="tab-pool" class="hidden">
+      <p class="dim">所有启用订阅按各自筛选与清洗规则汇总的节点名，含自建节点；订阅卡片「查看节点」仍显示原始名称。</p>
+      <div class="toolbar">
+        <input id="pool-filter" placeholder="正则筛选清洗后的节点名，如 香港|家宽|IPLC（留空显示全部）">
+      </div>
+      <p class="dim" id="pool-count"></p>
+      <div id="pool-list"></div>
     </div>
 
     <div id="tab-nodes" class="hidden">
@@ -89,6 +99,7 @@
 <!-- 节点查看 -->
 <dialog id="dlg-nodes">
   <h3 id="nodes-title">节点</h3>
+  <p class="dim">以下为订阅原始节点名；清洗与筛选后的结果见「节点池」。</p>
   <input id="nodes-filter" placeholder="正则筛选节点名，如 香港|HK|🇭🇰（留空显示全部）">
   <p class="dim" id="nodes-count"></p>
   <p class="err" id="nodes-err"></p>
@@ -112,6 +123,9 @@
         <option value="clash">Clash YAML（机场只提供 Clash 订阅时使用）</option>
       </select>
     </label>
+    <label>节点名包含正则（可选，针对订阅原始节点名，留空不过滤）<input id="sub-include" placeholder="如 香港|HK|🇭🇰"></label>
+    <label>节点名排除正则（可选，针对原始节点名）<input id="sub-exclude" placeholder="如 公告|频道|到期|测试"></label>
+    <label class="chk"><input id="sub-clean" type="checkbox" checked> 清洗节点名（识别地区，保留倍率 / 家宽 / IPLC 等标识）</label>
     <label class="chk"><input id="sub-enabled" type="checkbox" checked> 启用</label>
     <div class="actions">
       <button type="button" id="sub-cancel">取消</button>
@@ -149,8 +163,8 @@
     <label>包含来源</label>
     <div id="link-sources"></div>
     <label class="chk"><input id="link-custom" type="checkbox" checked> 自建节点</label>
-    <label>节点名包含正则（可选，匹配含 [来源] 前缀的完整节点名，留空不过滤）<input id="link-include" placeholder="如 香港|HK|🇭🇰"></label>
-    <label>节点名排除正则（可选）<input id="link-exclude" placeholder="如 公告|频道|到期|提示"></label>
+    <label>节点名包含正则（可选，匹配清洗后名称或原始名，留空不过滤）<input id="link-include" placeholder="如 香港|HK|🇭🇰"></label>
+    <label>节点名排除正则（可选，同样匹配清洗后名称或原始名）<input id="link-exclude" placeholder="如 公告|频道|到期|提示"></label>
     <label class="chk"><input id="link-enabled" type="checkbox" checked> 启用</label>
     <div class="actions">
       <button type="button" id="link-cancel">取消</button>
