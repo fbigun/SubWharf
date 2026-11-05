@@ -58,6 +58,7 @@
       <button data-tab="pool">节点池</button>
       <button data-tab="nodes">自建节点</button>
       <button data-tab="links">输出链接</button>
+      <button data-tab="template">模板</button>
     </nav>
 
     <div id="tab-subs">
@@ -92,6 +93,20 @@
         <button id="btn-add-link">新增链接</button>
       </div>
       <div id="link-list"></div>
+    </div>
+
+    <div id="tab-template" class="hidden">
+      <p class="dim">
+        维护多个 sing-box 模板，在输出链接里选择绑定哪个模板。生成时保留模板的 inbounds、DNS、路由与分组，
+        注入该链接的节点并按分组 tag 填充（香港 / 日本 / 美国 / 自动选择 / 手动切换，空分组回退 COMPATIBLE）。
+        结果按链接缓存在 KV，客户端拉取时直接返回；模板输出以模板路由为准，忽略链接的规则选项与 ?rules 参数。
+      </p>
+      <div class="toolbar">
+        <button id="btn-add-template">新增模板</button>
+        <button id="btn-refresh-templates">刷新全部模板</button>
+      </div>
+      <p class="err" id="tpl-msg"></p>
+      <div id="tpl-list"></div>
     </div>
   </section>
 </main>
@@ -148,6 +163,11 @@
         <option value="uri">URI 列表</option>
       </select>
     </label>
+    <label>输出模板（singbox 输出使用）
+      <select id="link-template">
+        <option value="">不使用（内置最小配置）</option>
+      </select>
+    </label>
     <label>规则
       <select id="link-rules">
         <option value="none">仅代理（不做分流）</option>
@@ -169,6 +189,20 @@
     <div class="actions">
       <button type="button" id="link-cancel">取消</button>
       <button type="submit">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 模板表单 -->
+<dialog id="dlg-template">
+  <h3 id="tpl-title">新增模板</h3>
+  <p class="err" id="tpl-err"></p>
+  <form id="form-template">
+    <label>名称<input id="tpl-name" required></label>
+    <label>模板 JSON 地址（CNB 文件页地址会自动转为原始地址）<input id="tpl-url" placeholder="https://…"></label>
+    <div class="actions">
+      <button type="button" id="tpl-cancel">取消</button>
+      <button type="submit">保存并刷新</button>
     </div>
   </form>
 </dialog>

@@ -2,7 +2,7 @@
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
-const state = { me: null, subs: [], pool: { nodes: [], skipped: [], deduped: 0 }, nodes: [], links: [], editingSub: null, editingLink: null };
+const state = { me: null, subs: [], pool: { nodes: [], skipped: [], deduped: 0 }, nodes: [], links: [], templates: [], editingSub: null, editingLink: null, editingTemplate: null };
 
 async function api(path, opts = {}) {
   const init = { method: opts.method || 'GET', headers: {} };
@@ -122,27 +122,30 @@ $('#btn-logout').addEventListener('click', async () => {
 $$('#tabs button').forEach((b) =>
   b.addEventListener('click', () => {
     $$('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
-    for (const t of ['subs', 'pool', 'nodes', 'links']) $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab);
+    for (const t of ['subs', 'pool', 'nodes', 'links', 'template']) $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab);
   })
 );
 
 // ---------- 数据加载 ----------
 
 async function reload() {
-  const [status, poolR, nodesR, linksR] = await Promise.all([
+  const [status, poolR, nodesR, linksR, templatesR] = await Promise.all([
     api('/api/status'),
     api('/api/pool'),
     api('/api/nodes'),
     api('/api/links'),
+    api('/api/templates'),
   ]);
   state.subs = status.subs;
   state.pool = poolR;
   state.nodes = nodesR.nodes;
   state.links = linksR.links;
+  state.templates = templatesR.templates;
   renderSubs();
   renderPool();
   renderNodes();
   renderLinks();
+  renderTemplates();
 }
 
 // ---------- 订阅 ----------
@@ -472,12 +475,14 @@ function renderLinks() {
   el.innerHTML = state.links
     .map((l) => {
       const filt = [l.include ? `含 ${l.include}` : '', l.exclude ? `排除 ${l.exclude}` : ''].filter(Boolean).join('，');
+      const tplName = l.templateId ? state.templates.find((t) => t.id === l.templateId)?.name ?? '模板已删除' : '';
       return `
     <div class="card" data-token="${l.token}">
       <div class="row">
         <strong>${esc(l.label)}</strong>
         <span class="badge">${l.target}</span>
         <span class="badge">${l.rules === 'cn' ? '绕华直连' : '纯代理'}</span>
+        ${tplName ? `<span class="badge">模板：${esc(tplName)}</span>` : ''}
         <span class="badge ${l.enabled ? 'ok' : 'off'}">${l.enabled ? '启用' : '停用'}</span>
         <span class="grow"></span>
         <button data-act="copy">复制链接</button>
@@ -554,6 +559,10 @@ function openLinkDialog(l) {
     )
     .join('') || '<span class="dim">暂无订阅，可仅输出自建节点</span>';
   $('#link-custom').checked = l ? l.includeCustom : true;
+  $('#link-template').innerHTML =
+    '<option value="">不使用（内置最小配置）</option>' +
+    state.templates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  $('#link-template').value = l?.templateId ?? '';
   toggleRsource();
   $('#dlg-link').showModal();
 }
@@ -578,6 +587,7 @@ $('#form-link').addEventListener('submit', async (e) => {
     enabled: $('#link-enabled').checked,
     include: $('#link-include').value,
     exclude: $('#link-exclude').value,
+    templateId: $('#link-template').value,
   };
   for (const [key, label] of [['include', '包含正则'], ['exclude', '排除正则']]) {
     const v = body[key].trim();
@@ -601,5 +611,113 @@ $('#form-link').addEventListener('submit', async (e) => {
 });
 
 $('#link-cancel').addEventListener('click', () => $('#dlg-link').close());
+
+// ---------- 模板 ----------
+
+function renderTemplates() {
+  const el = $('#tpl-list');
+  if (!state.templates.length) {
+    el.innerHTML = '<p class="dim">还没有模板。新增模板后在「输出链接」里选择绑定；未绑定的链接使用内置最小配置。</p>';
+    return;
+  }
+  el.innerHTML = state.templates
+    .map((t) => {
+      const outputs = t.outputs ?? [];
+      const usage = outputs.length
+        ? outputs
+            .map(
+              (o) => `
+      <div class="row">
+        <strong class="grow">${esc(o.label)}</strong>
+        <span class="dim">${o.generatedAt ? `节点 ${o.nodeCount} 个 · 生成 ${fmtTime(o.generatedAt)}` : '尚未生成'}</span>
+      </div>`
+            )
+            .join('')
+        : '<span class="dim">没有链接绑定此模板</span>';
+      return `
+    <div class="card" data-id="${t.id}">
+      <div class="row">
+        <strong>${esc(t.name)}</strong>
+        <span class="grow"></span>
+        <button data-act="refresh">刷新</button>
+        <button data-act="edit">编辑</button>
+        <button data-act="del" class="danger">删除</button>
+      </div>
+      <div class="row dim"><code>${esc(t.url)}</code></div>
+      <div class="row dim">最近拉取 ${fmtTime(t.fetchedAt)}${t.error ? ` · 最近失败 ${fmtTime(t.errorAt)}` : ''}</div>
+      ${t.error ? `<div class="row err">✘ ${esc(t.error)}${t.fetchedAt ? '（保留上次成功模板）' : ''}</div>` : ''}
+      <div class="row dim">使用链接：</div>
+      ${usage}
+    </div>`;
+    })
+    .join('');
+}
+
+function openTemplateDialog(t) {
+  state.editingTemplate = t?.id ?? null;
+  $('#tpl-title').textContent = t ? '编辑模板' : '新增模板';
+  $('#tpl-err').textContent = '';
+  $('#tpl-name').value = t?.name ?? '';
+  $('#tpl-url').value = t?.url ?? '';
+  $('#dlg-template').showModal();
+}
+
+$('#btn-add-template').addEventListener('click', () => openTemplateDialog(null));
+$('#tpl-cancel').addEventListener('click', () => $('#dlg-template').close());
+
+$('#form-template').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('#tpl-err').textContent = '';
+  const body = { name: $('#tpl-name').value.trim(), url: $('#tpl-url').value.trim() };
+  if (!body.url) {
+    $('#tpl-err').textContent = '请填写模板地址';
+    return;
+  }
+  try {
+    if (state.editingTemplate) await api(`/api/templates/${state.editingTemplate}`, { method: 'PUT', body });
+    else await api('/api/templates', { method: 'POST', body });
+    $('#dlg-template').close();
+    await reload();
+  } catch (e) {
+    $('#tpl-err').textContent = e.message;
+  }
+});
+
+$('#btn-refresh-templates').addEventListener('click', async (e) => {
+  $('#tpl-msg').textContent = '';
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = '刷新中…';
+  try {
+    await api('/api/templates/refresh', { method: 'POST' });
+    await reload();
+  } catch (e) {
+    $('#tpl-msg').textContent = e.message;
+  }
+  btn.disabled = false;
+  btn.textContent = '刷新全部模板';
+});
+
+$('#tpl-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const id = btn.closest('.card').dataset.id;
+  const t = state.templates.find((x) => x.id === id);
+  try {
+    if (btn.dataset.act === 'edit') return openTemplateDialog(t);
+    if (btn.dataset.act === 'refresh') {
+      btn.disabled = true;
+      await api(`/api/templates/${id}/refresh`, { method: 'POST' });
+      return reload();
+    }
+    if (btn.dataset.act === 'del' && confirm(`删除模板「${t.name}」？绑定它的链接将回到内置最小配置。`)) {
+      await api(`/api/templates/${id}`, { method: 'DELETE' });
+      return reload();
+    }
+  } catch (e) {
+    $('#tpl-msg').textContent = e.message;
+    btn.disabled = false;
+  }
+});
 
 boot();
