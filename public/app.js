@@ -2,7 +2,7 @@
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
-const state = { me: null, subs: [], nodes: [], links: [], editingSub: null, editingLink: null };
+const state = { me: null, subs: [], pool: { nodes: [], skipped: [], deduped: 0 }, nodes: [], links: [], editingSub: null, editingLink: null };
 
 async function api(path, opts = {}) {
   const init = { method: opts.method || 'GET', headers: {} };
@@ -122,18 +122,25 @@ $('#btn-logout').addEventListener('click', async () => {
 $$('#tabs button').forEach((b) =>
   b.addEventListener('click', () => {
     $$('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
-    for (const t of ['subs', 'nodes', 'links']) $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab);
+    for (const t of ['subs', 'pool', 'nodes', 'links']) $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab);
   })
 );
 
 // ---------- 数据加载 ----------
 
 async function reload() {
-  const [status, nodesR, linksR] = await Promise.all([api('/api/status'), api('/api/nodes'), api('/api/links')]);
+  const [status, poolR, nodesR, linksR] = await Promise.all([
+    api('/api/status'),
+    api('/api/pool'),
+    api('/api/nodes'),
+    api('/api/links'),
+  ]);
   state.subs = status.subs;
+  state.pool = poolR;
   state.nodes = nodesR.nodes;
   state.links = linksR.links;
   renderSubs();
+  renderPool();
   renderNodes();
   renderLinks();
 }
@@ -177,8 +184,15 @@ function renderSubs() {
     return;
   }
   el.innerHTML = state.subs
-    .map(
-      (s) => `
+    .map((s) => {
+      const rules = [
+        s.clean ? '名称清洗' : '保留原名',
+        s.include ? `包含 ${esc(s.include)}` : '',
+        s.exclude ? `排除 ${esc(s.exclude)}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      return `
     <div class="card" data-id="${s.id}">
       <div class="row">
         <strong>${esc(s.name)}</strong>
@@ -192,11 +206,12 @@ function renderSubs() {
         <button data-act="del" class="danger">删除</button>
       </div>
       <div class="row dim">节点 ${s.snap?.nodeCount ?? 0} 个 · 上次抓取 ${fmtTime(s.snap?.fetchedAt)}</div>
+      <div class="row dim">节点规则：${rules}</div>
       ${s.snap?.error ? `<div class="row err">✘ ${esc(s.snap.error)}（${fmtTime(s.snap.errorAt)}，保留上次成功快照）</div>` : ''}
       ${s.snap?.skipped?.length ? `<div class="row dim">跳过：${esc(s.snap.skipped.join('；'))}</div>` : ''}
       ${s.snap?.userinfo ? `<div class="row">${trafficBar(s.snap.userinfo)}</div>` : ''}
-    </div>`
-    )
+    </div>`;
+    })
     .join('');
 }
 
@@ -234,6 +249,9 @@ function openSubDialog(s) {
   $('#sub-url').placeholder = s ? '留空表示不修改' : 'https://…';
   $('#sub-ua').value = s?.ua ?? '';
   $('#sub-format').value = s?.format ?? 'base64';
+  $('#sub-include').value = s?.include ?? '';
+  $('#sub-exclude').value = s?.exclude ?? '';
+  $('#sub-clean').checked = s ? s.clean !== false : true;
   $('#sub-enabled').checked = s ? s.enabled : true;
   $('#dlg-sub').showModal();
 }
@@ -247,8 +265,25 @@ $('#form-sub').addEventListener('submit', async (e) => {
     name: $('#sub-name').value,
     ua: $('#sub-ua').value,
     format: $('#sub-format').value,
+    include: $('#sub-include').value,
+    exclude: $('#sub-exclude').value,
+    clean: $('#sub-clean').checked,
     enabled: $('#sub-enabled').checked,
   };
+  for (const [key, label] of [
+    ['include', '包含正则'],
+    ['exclude', '排除正则'],
+  ]) {
+    const v = body[key].trim();
+    if (v) {
+      try {
+        new RegExp(v);
+      } catch (e) {
+        $('#sub-err').textContent = `${label}无效：${e.message}`;
+        return;
+      }
+    }
+  }
   const url = $('#sub-url').value.trim();
   if (url) body.url = url;
   if (!url && !state.editingSub) {
@@ -280,6 +315,43 @@ $('#btn-refresh-all').addEventListener('click', async (e) => {
   btn.disabled = false;
   btn.textContent = '立即刷新全部';
 });
+
+// ---------- 节点池（清洗后） ----------
+
+function renderPool() {
+  const q = $('#pool-filter').value.trim();
+  let re = null;
+  if (q) {
+    try {
+      re = new RegExp(q);
+    } catch (e) {
+      $('#pool-count').textContent = '正则无效：' + e.message;
+      $('#pool-list').innerHTML = '';
+      return;
+    }
+  }
+  const all = state.pool.nodes;
+  const list = re ? all.filter((n) => re.test(n.name)) : all;
+  const stats = [`共 ${all.length} 个`];
+  if (state.pool.deduped) stats.push(`内容去重 ${state.pool.deduped} 个`);
+  if (state.pool.skipped?.length) stats.push(`跳过：${state.pool.skipped.join('；')}`);
+  $('#pool-count').textContent = (re ? `匹配 ${list.length} / ` : '') + stats.join(' · ');
+  $('#pool-list').innerHTML =
+    list
+      .map((n) => {
+        const changed = n.name !== `[${n.source}] ${n.original}`;
+        return `
+    <div class="row node-row">
+      <span class="badge">${esc(n.type)}</span>
+      <span class="grow">${esc(n.name)}</span>
+      ${changed ? `<span class="dim">原名 ${esc(n.original)}</span>` : ''}
+      <span class="dim">${esc(n.source)} · ${esc(n.server)}:${n.port}</span>
+    </div>`;
+      })
+      .join('') || '<p class="dim">无匹配节点</p>';
+}
+
+$('#pool-filter').addEventListener('input', renderPool);
 
 // ---------- 节点查看（正则筛选） ----------
 

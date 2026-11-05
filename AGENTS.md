@@ -6,7 +6,7 @@
 ## 技术栈与结构
 
 - Cloudflare Workers（TypeScript）+ KV + Cron Triggers + Workers Static Assets；前端原生 JS，不引入构建链与后端框架。
-- 目标目录：`src/index.ts`（路由）、`src/auth.ts`、`src/subs.ts`、`src/parse.ts`、`src/render.ts`、`public/`、`wrangler.jsonc`。
+- 目标目录：`src/index.ts`（路由）、`src/auth.ts`、`src/subs.ts`、`src/parse.ts`、`src/rename.ts`、`src/render.ts`、`public/`、`wrangler.jsonc`。
 
 ## 命令
 
@@ -25,7 +25,7 @@
 
 ## 工作约定
 
-- `parse.ts` / `render.ts` 是正确性核心，改动必须附带可复现的验证样例（真实订阅片段或构造节点）并跑通。
+- `parse.ts` / `rename.ts` / `render.ts` 是正确性核心，改动必须附带可复现的验证样例（真实订阅片段或构造节点）并跑通。
 - 改动后用 `wrangler dev` 过一遍受影响路径再交付；涉及输出格式的改动，用真实客户端（Clash / sing-box）导入验证。
 - 依赖从简：新增依赖先说明必要性；不为一次性功能搭抽象层。
 - 提交遵循中文 Conventional Commits，分支 `{类型}/{简短描述}`。

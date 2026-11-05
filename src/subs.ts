@@ -3,6 +3,7 @@
 import type { Env } from './auth';
 import { hex, unwrapField, wrapField } from './auth';
 import { parseNodeUri, parseSubscription, type ProxyNode } from './parse';
+import { cleanNodeName } from './rename';
 
 export interface UserInfo {
   upload: number;
@@ -19,6 +20,9 @@ export interface SubRec {
   urlEnc: string; // AES-GCM 加密的订阅 URL
   ua?: string;
   format?: FetchFormat; // 缺省按 base64/URI 轻解析
+  include?: string; // 节点原名包含正则
+  exclude?: string; // 节点原名排除正则
+  clean?: boolean; // 节点名清洗，缺省按开启处理
   enabled: boolean;
   createdAt: number;
 }
@@ -92,7 +96,16 @@ export async function getSub(env: Env, id: string): Promise<SubRec | null> {
 
 export async function createSub(
   env: Env,
-  input: { name: string; url: string; ua?: string; format?: FetchFormat; enabled?: boolean }
+  input: {
+    name: string;
+    url: string;
+    ua?: string;
+    format?: FetchFormat;
+    include?: string;
+    exclude?: string;
+    clean?: boolean;
+    enabled?: boolean;
+  }
 ): Promise<SubRec> {
   const rec: SubRec = {
     id: newId(),
@@ -100,6 +113,9 @@ export async function createSub(
     urlEnc: await wrapField(env, input.url.trim()),
     ua: input.ua?.trim() || undefined,
     format: input.format === 'clash' ? 'clash' : undefined,
+    include: input.include?.trim() || undefined,
+    exclude: input.exclude?.trim() || undefined,
+    clean: input.clean ?? true,
     enabled: input.enabled ?? true,
     createdAt: Date.now(),
   };
@@ -110,7 +126,16 @@ export async function createSub(
 export async function updateSub(
   env: Env,
   id: string,
-  patch: { name?: string; url?: string; ua?: string; format?: FetchFormat; enabled?: boolean }
+  patch: {
+    name?: string;
+    url?: string;
+    ua?: string;
+    format?: FetchFormat;
+    include?: string;
+    exclude?: string;
+    clean?: boolean;
+    enabled?: boolean;
+  }
 ): Promise<SubRec | null> {
   const rec = await getSub(env, id);
   if (!rec) return null;
@@ -118,6 +143,9 @@ export async function updateSub(
   if (patch.url) rec.urlEnc = await wrapField(env, patch.url.trim());
   if (patch.ua !== undefined) rec.ua = patch.ua.trim() || undefined;
   if (patch.format !== undefined) rec.format = patch.format === 'clash' ? 'clash' : undefined;
+  if (patch.include !== undefined) rec.include = patch.include.trim() || undefined;
+  if (patch.exclude !== undefined) rec.exclude = patch.exclude.trim() || undefined;
+  if (patch.clean !== undefined) rec.clean = patch.clean;
   if (patch.enabled !== undefined) rec.enabled = patch.enabled;
   await putJson(env, `sub:${id}`, rec);
   return rec;
@@ -292,45 +320,129 @@ export async function deleteLink(env: Env, token: string): Promise<void> {
   await env.KV.delete(`link:${token}`);
 }
 
-/** 汇总链接勾选的订阅快照与自建节点，按来源加前缀、应用正则筛选并对重名追加序号 */
-export async function collectNodes(env: Env, link: LinkRec): Promise<{ nodes: ProxyNode[]; skipped: string[] }> {
-  const nodes: ProxyNode[] = [];
+// ---------- 节点汇总 ----------
+
+function compileRegex(v?: string): RegExp | null {
+  if (!v?.trim()) return null;
+  try {
+    return new RegExp(v.trim());
+  } catch {
+    return null;
+  }
+}
+
+export interface CollectedNode extends ProxyNode {
+  original: string; // 清洗前的原始节点名
+  source: string; // 订阅名或「自建」
+}
+
+/** 每订阅处理：原始名正则筛选 → 名称清洗 → 来源前缀 */
+function prepareSubNodes(sub: SubRec, nodes: ProxyNode[]): CollectedNode[] {
+  const inc = compileRegex(sub.include);
+  const exc = compileRegex(sub.exclude);
+  const clean = sub.clean !== false;
+  const out: CollectedNode[] = [];
+  for (const n of nodes) {
+    const original = n.name;
+    if (inc && !inc.test(original)) continue;
+    if (exc && exc.test(original)) continue;
+    out.push({
+      ...n,
+      name: `[${sub.name}] ${clean ? cleanNodeName(original) : original}`,
+      original,
+      source: sub.name,
+    });
+  }
+  return out;
+}
+
+function prepareCustomNodes(records: NodeRec[]): CollectedNode[] {
+  return records.map((r) => ({ ...r.node, name: `[自建] ${r.node.name}`, original: r.node.name, source: '自建' }));
+}
+
+// 连接字段相同即视为同一节点；名称与来源不参与比较
+const nodeKey = (n: ProxyNode) =>
+  JSON.stringify(
+    Object.entries(n)
+      .filter(([k, v]) => v !== undefined && k !== 'name' && k !== 'original' && k !== 'source')
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  );
+
+function dedupeNodes(nodes: CollectedNode[]): { nodes: CollectedNode[]; removed: number } {
+  const seen = new Set<string>();
+  const out: CollectedNode[] = [];
+  for (const n of nodes) {
+    const k = nodeKey(n);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(n);
+  }
+  return { nodes: out, removed: nodes.length - out.length };
+}
+
+function uniqueNames(nodes: CollectedNode[]): void {
+  const used = new Set<string>();
+  for (const n of nodes) {
+    if (!used.has(n.name)) {
+      used.add(n.name);
+      continue;
+    }
+    let i = 2;
+    while (used.has(`${n.name} #${i}`)) i++;
+    n.name = `${n.name} #${i}`;
+    used.add(n.name);
+  }
+}
+
+function sourceMatches(re: RegExp, n: CollectedNode): boolean {
+  return re.test(n.name) || re.test(`[${n.source}] ${n.original}`);
+}
+
+/** 汇总链接勾选的订阅快照与自建节点，按来源加前缀、应用筛选与清洗并去重 */
+export async function collectNodes(
+  env: Env,
+  link: LinkRec
+): Promise<{ nodes: CollectedNode[]; skipped: string[]; deduped: number }> {
+  const nodes: CollectedNode[] = [];
   const skipped: string[] = [];
   for (const subId of link.sources) {
     const sub = await getSub(env, subId);
-    const snap = await getSnapshot(env, subId);
     if (!sub) {
       skipped.push('来源包含已删除的订阅');
       continue;
     }
+    const snap = await getSnapshot(env, subId);
     if (!snap || !snap.nodes.length) {
       skipped.push(`[${sub.name}] 暂无可用快照`);
       continue;
     }
-    for (const n of snap.nodes) nodes.push({ ...n, name: `[${sub.name}] ${n.name}` });
+    nodes.push(...prepareSubNodes(sub, snap.nodes));
   }
-  if (link.includeCustom) {
-    for (const rec of await listNodes(env)) nodes.push({ ...rec.node, name: `[自建] ${rec.node.name}` });
+  if (link.includeCustom) nodes.push(...prepareCustomNodes(await listNodes(env)));
+  // 正则同时匹配清洗后名称与原始名（含来源前缀），避免清洗后旧链接筛选失效
+  const inc = compileRegex(link.include);
+  const exc = compileRegex(link.exclude);
+  const filtered = inc || exc ? nodes.filter((n) => (!inc || sourceMatches(inc, n)) && (!exc || !sourceMatches(exc, n))) : nodes;
+  const deduped = dedupeNodes(filtered);
+  uniqueNames(deduped.nodes);
+  return { nodes: deduped.nodes, skipped, deduped: deduped.removed };
+}
+
+/** 面板节点池：所有启用订阅（应用各自筛选/清洗）+ 自建节点 */
+export async function collectPool(env: Env): Promise<{ nodes: CollectedNode[]; skipped: string[]; deduped: number }> {
+  const nodes: CollectedNode[] = [];
+  const skipped: string[] = [];
+  for (const sub of await listSubs(env)) {
+    if (!sub.enabled) continue;
+    const snap = await getSnapshot(env, sub.id);
+    if (!snap || !snap.nodes.length) {
+      skipped.push(`[${sub.name}] 暂无可用快照`);
+      continue;
+    }
+    nodes.push(...prepareSubNodes(sub, snap.nodes));
   }
-  // 正则筛选：匹配含 [来源] 前缀的完整节点名；正则非法时视为不过滤（保存时已校验）
-  let inc: RegExp | null = null;
-  let exc: RegExp | null = null;
-  try {
-    inc = link.include ? new RegExp(link.include) : null;
-  } catch {
-    inc = null;
-  }
-  try {
-    exc = link.exclude ? new RegExp(link.exclude) : null;
-  } catch {
-    exc = null;
-  }
-  const filtered = inc || exc ? nodes.filter((n) => (!inc || inc.test(n.name)) && (!exc || !exc.test(n.name))) : nodes;
-  const seen = new Map<string, number>();
-  for (const n of filtered) {
-    const c = seen.get(n.name) ?? 0;
-    seen.set(n.name, c + 1);
-    if (c > 0) n.name = `${n.name} #${c + 1}`;
-  }
-  return { nodes: filtered, skipped };
+  nodes.push(...prepareCustomNodes(await listNodes(env)));
+  const deduped = dedupeNodes(nodes);
+  uniqueNames(deduped.nodes);
+  return { nodes: deduped.nodes, skipped, deduped: deduped.removed };
 }
