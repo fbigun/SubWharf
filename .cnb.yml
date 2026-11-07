@@ -1,10 +1,10 @@
 # CNB 流水线：push 到 main 并行触发两条独立流水线
-#   1) 同步源码到 GitHub（只需 github.yml）
+#   1) 同步源码到 GitHub：官方 tencentcom/git-sync 插件，同步全部分支与标签（只需 github.yml）
 #   2) 校验 + 初始化资源 + 部署 Cloudflare Workers（只需 cloudflare.yml）
 # 两条流水线相互独立：任一失败不影响另一条。
 # 凭据经密钥仓库注入（imports）：
 #   cloudflare.yml：CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / SESSION_KEY / WRAP_KEY / SETUP_CODE
-#   github.yml：GITHUB_TOKEN（GitHub PAT，Contents: Read and write；未配置则跳过 GitHub 同步）
+#   github.yml：GITHUB_TOKEN（GitHub PAT，Contents: Read and write）
 main:
   push:
     - name: 同步源码到 GitHub
@@ -13,19 +13,31 @@ main:
       imports:
         - https://cnb.cool/fbigun/secrets/-/blob/main/github.yml
       stages:
-        - name: 同步 main 到 GitHub
+        - name: 准备全部分支与标签
           script: |
-            if [ -z "${GITHUB_TOKEN:-}" ]; then
-              echo "未配置 GITHUB_TOKEN，跳过 GitHub 同步（在密钥仓库 github.yml 中添加）"
-              exit 0
+            : "${GITHUB_TOKEN:?密钥仓库 github.yml 缺少 GITHUB_TOKEN}"
+            if [ -f .git/shallow ]; then
+              git fetch --unshallow origin || true
             fi
-            AUTH="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
-            if ! git -c http.extraheader="AUTHORIZATION: basic $AUTH" push \
-              https://github.com/fbigun/SubWharf.git "HEAD:refs/heads/main"; then
-              echo "GitHub 推送失败：确认 github.yml 的 GITHUB_TOKEN 对 fbigun/SubWharf 具有 Contents: Read and write 权限"
-              exit 1
-            fi
-            echo "已同步 main 到 GitHub"
+            git fetch origin --prune --tags --force
+            for ref in $(git for-each-ref --format='%(refname)' refs/remotes/origin); do
+              case "$ref" in
+                refs/remotes/origin/HEAD) continue ;;
+              esac
+              branch="${ref#refs/remotes/origin/}"
+              git update-ref "refs/heads/$branch" "$ref"
+            done
+            echo "本地分支：$(git for-each-ref --format='%(refname:short)' refs/heads | tr '\n' ' ')"
+            echo "本地标签：$(git tag -l | tr '\n' ' ')"
+        - name: 同步到 GitHub
+          image: tencentcom/git-sync
+          settings:
+            target_url: https://github.com/fbigun/SubWharf.git
+            auth_type: https
+            username: x-access-token
+            password: ${GITHUB_TOKEN}
+            push_tags: true
+            force: true
 
     - name: 构建与部署
       docker:

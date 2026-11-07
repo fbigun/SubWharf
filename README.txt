@@ -125,7 +125,8 @@ wrangler.jsonc 声明：KV 绑定、crons、assets 目录。
 workers.dev 域名在境内被 DNS 污染，务必绑定自定义域名。
 
 自动部署（CNB 流水线）：push 到 main 并行触发两条独立流水线：
-  1) 同步源码到 GitHub（https://github.com/fbigun/SubWharf）
+  1) 同步源码到 GitHub（https://github.com/fbigun/SubWharf）：
+     使用官方 tencentcom/git-sync 插件推送全部分支与标签
   2) 构建与部署：npm ci → 类型检查 → 测试 → 自动确保 KV →
      npx wrangler deploy → 写入 secrets
 两条流水线互不影响：构建失败不阻止源码同步，同步失败也不影响部署。
@@ -143,6 +144,8 @@ workers.dev 域名在境内被 DNS 污染，务必绑定自定义域名。
                   GitHub 同步，不影响部署
 
 GitHub 为只读镜像，改动请统一走 CNB（直接提交可能被镜像覆盖）。
+同步使用 force 推送：同名分支/标签以 CNB 为准；不会删除 GitHub 上多出的
+分支或标签。
 
 首次部署时流水线自动创建 KV namespace 并回写 id，无需手动操作；
 .cnb.yml 里 imports 的密钥仓库路径（fbigun/secrets）需替换为你自己的。
