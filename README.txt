@@ -126,16 +126,19 @@ workers.dev 域名在境内被 DNS 污染，务必绑定自定义域名。
 
 自动部署（CNB 流水线）：push 到 main 触发 .cnb.yml——npm ci → 类型检查
 → 测试 → 自动确保 KV → npx wrangler deploy → 写入 secrets → 镜像到
-GitHub（https://github.com/fbigun/SubWharf）。Cloudflare
-凭据经 CNB 密钥仓库注入：创建密钥仓库并在 Web 界面添加 cloudflare.yml：
+GitHub（https://github.com/fbigun/SubWharf）。凭据经 CNB
+密钥仓库注入：在密钥仓库添加 cloudflare.yml 与 github.yml：
 
-  CLOUDFLARE_API_TOKEN: 「编辑 Cloudflare Workers」模板 token
-  CLOUDFLARE_ACCOUNT_ID: 账号 ID（控制台首页右侧栏）
-  SESSION_KEY:  任意随机串（openssl rand -hex 32）
-  WRAP_KEY:     任意随机串（openssl rand -hex 32）
-  SETUP_CODE:   自定的初始化口令
-  GITHUB_TOKEN: GitHub PAT（Contents: Read and write）；未配置则跳过
-                GitHub 同步，不影响部署
+  cloudflare.yml:
+    CLOUDFLARE_API_TOKEN: 「编辑 Cloudflare Workers」模板 token
+    CLOUDFLARE_ACCOUNT_ID: 账号 ID（控制台首页右侧栏）
+    SESSION_KEY:  任意随机串（openssl rand -hex 32）
+    WRAP_KEY:     任意随机串（openssl rand -hex 32）
+    SETUP_CODE:   自定的初始化口令
+
+  github.yml:
+    GITHUB_TOKEN: GitHub PAT（Contents: Read and write）；未配置则跳过
+                  GitHub 同步，不影响部署
 
 GitHub 为只读镜像，改动请统一走 CNB（直接提交可能被镜像覆盖）。
 
@@ -144,8 +147,8 @@ GitHub 为只读镜像，改动请统一走 CNB（直接提交可能被镜像覆
 
 Fork 部署清单（fork 后按自己账号部署）：
   1. Cloudflare 创建 API Token（「编辑 Cloudflare Workers」模板）
-  2. CNB 自建密钥仓库，按上方格式添加 cloudflare.yml（6 个值全部
-     用自己的；GITHUB_TOKEN 不需要 GitHub 镜像时可省略；
+  2. CNB 自建密钥仓库，按上方格式添加 cloudflare.yml 与可选的
+     github.yml（不需要 GitHub 镜像时可省略 github.yml；
      .cnb.yml 的 imports 路径改为你的密钥仓库——个人环境
      变量仅对云原生开发环境生效，对 CI 无效）
   3. push 到 main 即自动完成 KV 创建、部署与 secrets 写入
