@@ -1,7 +1,8 @@
-# CNB 流水线：push 到 main 触发 校验 + 自动初始化资源 + 部署到 Cloudflare Workers
+# CNB 流水线：push 到 main 触发 校验 + 自动初始化资源 + 部署到 Cloudflare Workers + 镜像到 GitHub
 # Cloudflare 凭据经密钥仓库注入（imports），需包含：
 #   CLOUDFLARE_API_TOKEN（「编辑 Cloudflare Workers」模板）
 #   CLOUDFLARE_ACCOUNT_ID / SESSION_KEY / WRAP_KEY / SETUP_CODE
+#   GITHUB_TOKEN（GitHub PAT，Contents: Read and write；未配置则跳过 GitHub 同步）
 main:
   push:
     - docker:
@@ -27,3 +28,13 @@ main:
             printf '%s' "$SESSION_KEY" | npx wrangler secret put SESSION_KEY
             printf '%s' "$WRAP_KEY" | npx wrangler secret put WRAP_KEY
             printf '%s' "$SETUP_CODE" | npx wrangler secret put SETUP_CODE
+        - name: 同步到 GitHub
+          script: |
+            if [ -z "${GITHUB_TOKEN:-}" ]; then
+              echo "未配置 GITHUB_TOKEN，跳过 GitHub 同步（在密钥仓库 cloudflare.yml 中添加）"
+              exit 0
+            fi
+            AUTH="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+            git -c http.extraheader="AUTHORIZATION: basic $AUTH" push \
+              https://github.com/fbigun/SubWharf.git "HEAD:refs/heads/main"
+            echo "已同步 main 到 GitHub"
