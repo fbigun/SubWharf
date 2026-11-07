@@ -31,10 +31,13 @@ main:
         - name: 同步到 GitHub
           script: |
             if [ -z "${GITHUB_TOKEN:-}" ]; then
-              echo "未配置 GITHUB_TOKEN，跳过 GitHub 同步（在密钥仓库 cloudflare.yml 中添加）"
+              echo "未配置 GITHUB_TOKEN，跳过 GitHub 同步（在密钥仓库 github.yml 中添加）"
               exit 0
             fi
             AUTH="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
-            git -c http.extraheader="AUTHORIZATION: basic $AUTH" push \
-              https://github.com/fbigun/SubWharf.git "HEAD:refs/heads/main"
+            if ! git -c http.extraheader="AUTHORIZATION: basic $AUTH" push \
+              https://github.com/fbigun/SubWharf.git "HEAD:refs/heads/main"; then
+              echo "GitHub 推送失败：确认 github.yml 的 GITHUB_TOKEN 对 fbigun/SubWharf 具有 Contents: Read and write 权限"
+              exit 1
+            fi
             echo "已同步 main 到 GitHub"
