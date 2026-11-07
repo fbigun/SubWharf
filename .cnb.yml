@@ -1,14 +1,37 @@
-# CNB 流水线：push 到 main 触发 校验 + 自动初始化资源 + 部署到 Cloudflare Workers + 镜像到 GitHub
+# CNB 流水线：push 到 main 并行触发两条独立流水线
+#   1) 同步源码到 GitHub（只需 github.yml）
+#   2) 校验 + 初始化资源 + 部署 Cloudflare Workers（只需 cloudflare.yml）
+# 两条流水线相互独立：任一失败不影响另一条。
 # 凭据经密钥仓库注入（imports）：
 #   cloudflare.yml：CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / SESSION_KEY / WRAP_KEY / SETUP_CODE
 #   github.yml：GITHUB_TOKEN（GitHub PAT，Contents: Read and write；未配置则跳过 GitHub 同步）
 main:
   push:
-    - docker:
+    - name: 同步源码到 GitHub
+      docker:
+        image: node:24
+      imports:
+        - https://cnb.cool/fbigun/secrets/-/blob/main/github.yml
+      stages:
+        - name: 同步 main 到 GitHub
+          script: |
+            if [ -z "${GITHUB_TOKEN:-}" ]; then
+              echo "未配置 GITHUB_TOKEN，跳过 GitHub 同步（在密钥仓库 github.yml 中添加）"
+              exit 0
+            fi
+            AUTH="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+            if ! git -c http.extraheader="AUTHORIZATION: basic $AUTH" push \
+              https://github.com/fbigun/SubWharf.git "HEAD:refs/heads/main"; then
+              echo "GitHub 推送失败：确认 github.yml 的 GITHUB_TOKEN 对 fbigun/SubWharf 具有 Contents: Read and write 权限"
+              exit 1
+            fi
+            echo "已同步 main 到 GitHub"
+
+    - name: 构建与部署
+      docker:
         image: node:24
       imports:
         - https://cnb.cool/fbigun/secrets/-/blob/main/cloudflare.yml
-        - https://cnb.cool/fbigun/secrets/-/blob/main/github.yml
       stages:
         - name: 安装依赖
           script: npm ci --no-audit --no-fund
@@ -28,16 +51,3 @@ main:
             printf '%s' "$SESSION_KEY" | npx wrangler secret put SESSION_KEY
             printf '%s' "$WRAP_KEY" | npx wrangler secret put WRAP_KEY
             printf '%s' "$SETUP_CODE" | npx wrangler secret put SETUP_CODE
-        - name: 同步到 GitHub
-          script: |
-            if [ -z "${GITHUB_TOKEN:-}" ]; then
-              echo "未配置 GITHUB_TOKEN，跳过 GitHub 同步（在密钥仓库 github.yml 中添加）"
-              exit 0
-            fi
-            AUTH="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
-            if ! git -c http.extraheader="AUTHORIZATION: basic $AUTH" push \
-              https://github.com/fbigun/SubWharf.git "HEAD:refs/heads/main"; then
-              echo "GitHub 推送失败：确认 github.yml 的 GITHUB_TOKEN 对 fbigun/SubWharf 具有 Contents: Read and write 权限"
-              exit 1
-            fi
-            echo "已同步 main 到 GitHub"
