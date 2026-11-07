@@ -124,13 +124,15 @@ SubWharf 是部署在 Cloudflare Workers 上的个人订阅中转与管理面板
 wrangler.jsonc 声明：KV 绑定、crons、assets 目录。
 workers.dev 域名在境内被 DNS 污染，务必绑定自定义域名。
 
-自动部署（CNB 流水线）：push 到 main 并行触发两条独立流水线：
-  1) 同步源码到 GitHub（https://github.com/fbigun/SubWharf）：
-     使用官方 tencentcom/git-sync 插件推送全部分支与标签
-  2) 构建与部署：npm ci → 类型检查 → 测试 → 自动确保 KV →
-     npx wrangler deploy → 写入 secrets
-两条流水线互不影响：构建失败不阻止源码同步，同步失败也不影响部署。
-凭据经 CNB 密钥仓库注入：在密钥仓库添加 cloudflare.yml 与 github.yml：
+自动部署（CNB 流水线）：
+  * 任意分支 push 或 tag push：同步源码到 GitHub
+    （https://github.com/fbigun/SubWharf），使用官方
+    tencentcom/git-sync 插件推送全部分支与标签
+  * main push：并行触发构建与部署——npm ci → 类型检查 → 测试 →
+    自动确保 KV → npx wrangler deploy → 写入 secrets
+源码同步与构建部署相互独立：构建失败不阻止源码同步，同步失败也不影响
+部署。凭据经 CNB 密钥仓库注入：在密钥仓库添加 cloudflare.yml 与
+github.yml：
 
   cloudflare.yml:
     CLOUDFLARE_API_TOKEN: 「编辑 Cloudflare Workers」模板 token
@@ -156,7 +158,8 @@ Fork 部署清单（fork 后按自己账号部署）：
      github.yml（不需要 GitHub 镜像时可省略 github.yml；
      .cnb.yml 的 imports 路径改为你的密钥仓库——个人环境
      变量仅对云原生开发环境生效，对 CI 无效）
-  3. push 到 main 即并行完成源码同步与 KV 创建、部署、secrets 写入
+  3. 任意分支/tag push 会同步源码；main push 额外完成 KV 创建、部署与
+     secrets 写入
   4. 自定义域名在控制台 Workers & Pages → subwharf → Settings →
      Domains & Routes 绑定（自动建 DNS 与证书，无需改仓库配置）
 

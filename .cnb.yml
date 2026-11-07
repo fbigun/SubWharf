@@ -7,7 +7,8 @@
 #   github.yml：GITHUB_TOKEN（GitHub PAT，Contents: Read and write）
 main:
   push:
-    - name: 同步源码到 GitHub
+    - &sync
+      name: 同步源码到 GitHub
       docker:
         image: node:24
       imports:
@@ -63,3 +64,9 @@ main:
             printf '%s' "$SESSION_KEY" | npx wrangler secret put SESSION_KEY
             printf '%s' "$WRAP_KEY" | npx wrangler secret put WRAP_KEY
             printf '%s' "$SETUP_CODE" | npx wrangler secret put SETUP_CODE
+
+$:
+  push:
+    - *sync
+  tag_push:
+    - *sync
