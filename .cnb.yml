@@ -1,14 +1,14 @@
 # CNB 流水线：push 到 main 触发 校验 + 自动初始化资源 + 部署到 Cloudflare Workers + 镜像到 GitHub
-# Cloudflare 凭据经密钥仓库注入（imports），需包含：
-#   CLOUDFLARE_API_TOKEN（「编辑 Cloudflare Workers」模板）
-#   CLOUDFLARE_ACCOUNT_ID / SESSION_KEY / WRAP_KEY / SETUP_CODE
-#   GITHUB_TOKEN（GitHub PAT，Contents: Read and write；未配置则跳过 GitHub 同步）
+# 凭据经密钥仓库注入（imports）：
+#   cloudflare.yml：CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / SESSION_KEY / WRAP_KEY / SETUP_CODE
+#   github.yml：GITHUB_TOKEN（GitHub PAT，Contents: Read and write；未配置则跳过 GitHub 同步）
 main:
   push:
     - docker:
         image: node:24
       imports:
         - https://cnb.cool/fbigun/secrets/-/blob/main/cloudflare.yml
+        - https://cnb.cool/fbigun/secrets/-/blob/main/github.yml
       stages:
         - name: 安装依赖
           script: npm ci --no-audit --no-fund
