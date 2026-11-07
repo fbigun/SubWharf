@@ -125,7 +125,8 @@ wrangler.jsonc 声明：KV 绑定、crons、assets 目录。
 workers.dev 域名在境内被 DNS 污染，务必绑定自定义域名。
 
 自动部署（CNB 流水线）：push 到 main 触发 .cnb.yml——npm ci → 类型检查
-→ 测试 → 自动确保 KV → npx wrangler deploy → 写入 secrets。Cloudflare
+→ 测试 → 自动确保 KV → npx wrangler deploy → 写入 secrets → 镜像到
+GitHub（https://github.com/fbigun/SubWharf）。Cloudflare
 凭据经 CNB 密钥仓库注入：创建密钥仓库并在 Web 界面添加 cloudflare.yml：
 
   CLOUDFLARE_API_TOKEN: 「编辑 Cloudflare Workers」模板 token
@@ -133,14 +134,19 @@ workers.dev 域名在境内被 DNS 污染，务必绑定自定义域名。
   SESSION_KEY:  任意随机串（openssl rand -hex 32）
   WRAP_KEY:     任意随机串（openssl rand -hex 32）
   SETUP_CODE:   自定的初始化口令
+  GITHUB_TOKEN: GitHub PAT（Contents: Read and write）；未配置则跳过
+                GitHub 同步，不影响部署
+
+GitHub 为只读镜像，改动请统一走 CNB（直接提交可能被镜像覆盖）。
 
 首次部署时流水线自动创建 KV namespace 并回写 id，无需手动操作；
 .cnb.yml 里 imports 的密钥仓库路径（fbigun/secrets）需替换为你自己的。
 
 Fork 部署清单（fork 后按自己账号部署）：
   1. Cloudflare 创建 API Token（「编辑 Cloudflare Workers」模板）
-  2. CNB 自建密钥仓库，按上方格式添加 cloudflare.yml（5 个值全部
-     用自己的；.cnb.yml 的 imports 路径改为你的密钥仓库——个人环境
+  2. CNB 自建密钥仓库，按上方格式添加 cloudflare.yml（6 个值全部
+     用自己的；GITHUB_TOKEN 不需要 GitHub 镜像时可省略；
+     .cnb.yml 的 imports 路径改为你的密钥仓库——个人环境
      变量仅对云原生开发环境生效，对 CI 无效）
   3. push 到 main 即自动完成 KV 创建、部署与 secrets 写入
   4. 自定义域名在控制台 Workers & Pages → subwharf → Settings →
