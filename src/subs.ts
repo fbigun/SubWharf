@@ -1,7 +1,9 @@
 // 订阅 / 自建节点 / 输出链接的 KV 管理与抓取调度。
 // 订阅 URL、TOTP 密钥等敏感数据 AES-GCM 加密落盘；日志与错误信息不包含 URL 与 token。
+// 节点凭据（uuid/password）随快照与自建节点明文落盘：与订阅 URL 内的机场账号 token 不同级，
+// 且输出渲染频繁、逐字段加解密会超免费版 CPU 预算，属有意取舍。
 import type { Env } from './auth';
-import { hex, unwrapField, wrapField } from './auth';
+import { errMsg, hex, newId, unwrapField, wrapField } from './auth';
 import { parseNodeUri, parseSubscription, type ProxyNode } from './parse';
 import { cleanNodeName } from './rename';
 
@@ -63,7 +65,7 @@ const CLASH_UA = 'clash.meta/v1.19.10';
 // ---------- KV 基础 ----------
 
 // 单管理员量级，KV list 一页（1000 键）足够
-async function listByPrefix<T>(env: Env, prefix: string): Promise<T[]> {
+export async function listByPrefix<T>(env: Env, prefix: string): Promise<T[]> {
   const res = await env.KV.list({ prefix });
   const out: T[] = [];
   for (const k of res.keys) {
@@ -81,7 +83,6 @@ async function putJson(env: Env, key: string, value: unknown, ttl?: number): Pro
   await env.KV.put(key, JSON.stringify(value), ttl ? { expirationTtl: ttl } : undefined);
 }
 
-const newId = () => hex(crypto.getRandomValues(new Uint8Array(8)));
 export const newToken = () => hex(crypto.getRandomValues(new Uint8Array(16))); // 128-bit
 
 // ---------- 订阅 ----------
@@ -163,6 +164,31 @@ export async function getSnapshot(env: Env, subId: string): Promise<SnapshotRec 
   return getJson<SnapshotRec>(env, `snap:${subId}`);
 }
 
+// 抓取响应体上限：Cloudflare 对响应无平台限制，isolate 内存 128MB；
+// 超限按失败处理并保留上次成功快照。常规订阅远小于 2 MiB（Clash 解析器内部另有 256KB 截断）。
+export const MAX_FETCH_BYTES = 2 * 1024 * 1024;
+
+/** 读取响应文本，超过 limit 抛错（错误信息不含 URL）；无 Content-Length 的分块响应逐块累计防超限 */
+export async function readTextLimited(res: Response, limit: number): Promise<string> {
+  if (Number(res.headers.get('Content-Length') ?? '0') > limit) throw new Error(`响应体超过 ${Math.ceil(limit / 1048576)} MiB 上限`);
+  const reader = res.body?.getReader();
+  if (!reader) return '';
+  let size = 0;
+  let text = '';
+  const decoder = new TextDecoder();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      throw new Error(`响应体超过 ${Math.ceil(limit / 1048576)} MiB 上限`);
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 function parseUserinfoHeader(h: string | null): UserInfo | undefined {
   if (!h) return undefined;
   const num = (k: string) => {
@@ -182,7 +208,7 @@ export async function refreshSub(env: Env, sub: SubRec): Promise<SnapshotRec> {
     const res = await fetch(url, { headers: { 'User-Agent': ua }, redirect: 'follow' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const userinfo = parseUserinfoHeader(res.headers.get('subscription-userinfo'));
-    const text = await res.text();
+    const text = await readTextLimited(res, MAX_FETCH_BYTES);
     const parsed = parseSubscription(text);
     const snap: SnapshotRec = {
       nodes: parsed.nodes,
@@ -194,7 +220,7 @@ export async function refreshSub(env: Env, sub: SubRec): Promise<SnapshotRec> {
     return snap;
   } catch (e) {
     const prev = (await getSnapshot(env, sub.id)) ?? { nodes: [] };
-    const snap: SnapshotRec = { ...prev, error: e instanceof Error ? e.message : String(e), errorAt: Date.now() };
+    const snap: SnapshotRec = { ...prev, error: errMsg(e), errorAt: Date.now() };
     await putJson(env, `snap:${sub.id}`, snap);
     return snap;
   }
@@ -232,7 +258,7 @@ export async function addNodes(env: Env, urisText: string): Promise<{ added: num
       await putJson(env, `node:${rec.id}`, rec);
       added += 1;
     } catch (e) {
-      skipped.push(`${uri.slice(0, 20)}…：${e instanceof Error ? e.message : String(e)}`);
+      skipped.push(`${uri.slice(0, 20)}…：${errMsg(e)}`);
     }
   }
   return { added, skipped };
@@ -342,7 +368,8 @@ export async function setLinkTemplate(env: Env, token: string, templateId?: stri
 
 // ---------- 节点汇总 ----------
 
-function compileRegex(v?: string): RegExp | null {
+/** 编译正则；空或非法返回 null。入口校验（null 即非法）与节点筛选（null 即不过滤）共用 */
+export function compileRegex(v?: string): RegExp | null {
   if (!v?.trim()) return null;
   try {
     return new RegExp(v.trim());

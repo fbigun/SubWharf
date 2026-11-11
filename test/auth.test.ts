@@ -10,6 +10,7 @@ import {
   getSessionId,
   hashPassword,
   sessionCookie,
+  timingSafeEqual,
   unwrapField,
   verifyPassword,
   verifyTotp,
@@ -64,6 +65,16 @@ describe('密码哈希', () => {
 
   it('相同密码每次盐不同', async () => {
     expect(await hashPassword('same')).not.toBe(await hashPassword('same'));
+  });
+});
+
+describe('常数时间比较', () => {
+  it('相等为 true，内容或长度不等为 false', () => {
+    expect(timingSafeEqual('abc', 'abc')).toBe(true);
+    expect(timingSafeEqual('abc', 'abd')).toBe(false);
+    expect(timingSafeEqual('abc', 'abcd')).toBe(false);
+    expect(timingSafeEqual('', '')).toBe(true);
+    expect(timingSafeEqual('中文🚀', '中文🚀')).toBe(true);
   });
 });
 

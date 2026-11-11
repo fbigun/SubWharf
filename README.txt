@@ -137,8 +137,8 @@ github.yml：
   cloudflare.yml:
     CLOUDFLARE_API_TOKEN: 「编辑 Cloudflare Workers」模板 token
     CLOUDFLARE_ACCOUNT_ID: 账号 ID（控制台首页右侧栏）
-    SESSION_KEY:  任意随机串（openssl rand -hex 32）
-    WRAP_KEY:     任意随机串（openssl rand -hex 32）
+    SESSION_KEY:  高熵随机串（openssl rand -hex 32；低熵可被伪造会话签名）
+    WRAP_KEY:     高熵随机串（openssl rand -hex 32；AES 密钥由其派生，低熵可被离线暴力破解）
     SETUP_CODE:   自定的初始化口令
 
   github.yml:
@@ -188,6 +188,10 @@ Fork 部署清单（fork 后按自己账号部署）：
   * 订阅 URL / TOTP 密钥 AES-GCM 加密落盘（WRAP_KEY）。
   * secrets 只存 wrangler secret，不入库、不入文档。
   * 管理面登录限速 + 双因子；公开端点只读、不含任何管理信息。
+    登录失败锁定为全局计数，攻击者可故意输错把管理员锁在门外
+    （15 分钟自动解锁），单管理员场景可接受。
+  * 请求体与抓取响应限制大小（API 请求体 1 MiB / 订阅响应 2 MiB /
+    模板响应 1 MiB），防异常响应或恶意大包撑爆 Worker 内存。
   * 日志不打印订阅 URL 与 token。
 
 九、状态与目录结构
