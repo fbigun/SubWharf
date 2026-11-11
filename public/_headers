@@ -1,0 +1,6 @@
+# 静态资源安全响应头（资产请求默认不经过 Worker，需在此声明）
+# CSP：面板无内联脚本；节点池流量条使用内联 style 属性，故 style-src 需 unsafe-inline
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'

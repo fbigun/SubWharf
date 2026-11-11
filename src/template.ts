@@ -1,9 +1,10 @@
 // 模板输出：管理多个 sing-box 模板，按链接绑定的模板注入节点并填充分组。
 // 模板自带的 inbounds / dns / route / rule_set 原样保留；渲染结果按输出链接缓存到 KV。
 import type { Env } from './auth';
+import { errMsg, newId } from './auth';
 import type { ProxyNode } from './parse';
 import { singboxOutbound } from './render';
-import { collectNodes, listLinks, setLinkTemplate, type LinkRec } from './subs';
+import { collectNodes, listByPrefix, listLinks, readTextLimited, setLinkTemplate, type LinkRec } from './subs';
 
 export interface TemplateRec {
   id: string;
@@ -47,6 +48,8 @@ const OUTPUT_PREFIX = 'tpl:';
 const tkey = (id: string) => `${PREFIX}${id}`;
 const outputKey = (token: string) => `${OUTPUT_PREFIX}${token}`;
 const TEMPLATE_UA = 'SubWharf/1.0';
+// 模板抓取响应上限：真实模板 JSON < 100KB，超限按失败处理并保留上次成功原文
+const MAX_TEMPLATE_BYTES = 1024 * 1024;
 // 输出序列化变更时递增：旧缓存按未命中处理，首次拉取自动重建
 const RENDER_VERSION = 1;
 
@@ -54,13 +57,6 @@ const RENDER_VERSION = 1;
 const REGION_TAGS = [/港|hk|hongkong|kong kong|🇭🇰/i, /日本|jp|japan|🇯🇵/i, /美|us|unitedstates|united states|🇺🇸/i];
 const ALL_NODE_TAGS = /自动选择|手动切换/;
 const FALLBACK_TAG = 'COMPATIBLE';
-
-function msg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
-const newId = () =>
-  Array.from(crypto.getRandomValues(new Uint8Array(8)), (x) => x.toString(16).padStart(2, '0')).join('');
 
 /** CNB 文件页地址（/-/blob/）转为原始内容地址（/-/git/raw/）；其他地址原样使用 */
 export function normalizeTemplateUrl(raw: string): string {
@@ -132,13 +128,8 @@ async function putTemplate(env: Env, rec: TemplateRec): Promise<void> {
 }
 
 export async function listTemplates(env: Env): Promise<TemplateRec[]> {
-  const res = await env.KV.list({ prefix: PREFIX });
-  const out: TemplateRec[] = [];
-  for (const k of res.keys) {
-    const v = await env.KV.get<TemplateRec>(k.name, 'json');
-    if (v && typeof v.id === 'string') out.push(v);
-  }
-  return out.sort((a, b) => a.createdAt - b.createdAt);
+  const recs = await listByPrefix<TemplateRec>(env, PREFIX);
+  return recs.filter((t) => typeof t.id === 'string').sort((a, b) => a.createdAt - b.createdAt);
 }
 
 export async function getTemplate(env: Env, id: string): Promise<TemplateRec | null> {
@@ -202,13 +193,13 @@ export async function refreshTemplate(env: Env, id: string): Promise<TemplateRec
   try {
     const res = await fetch(normalizeTemplateUrl(rec.url), { headers: { 'User-Agent': TEMPLATE_UA }, redirect: 'follow' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const text = await res.text();
+    const text = await readTextLimited(res, MAX_TEMPLATE_BYTES);
     parseTemplate(text);
     const next: TemplateRec = { id: rec.id, name: rec.name, url: rec.url, text, fetchedAt: Date.now(), createdAt: rec.createdAt };
     await putTemplate(env, next);
     return next;
   } catch (e) {
-    const next: TemplateRec = { ...rec, error: msg(e), errorAt: Date.now() };
+    const next: TemplateRec = { ...rec, error: errMsg(e), errorAt: Date.now() };
     await putTemplate(env, next);
     return next;
   }

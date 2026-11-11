@@ -18,6 +18,11 @@ export interface Profile {
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+/** 统一错误消息提取：Error 取 message，其余 String() */
+export function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 // ---------- base64 / base32 ----------
 
 export function bytesToB64(b: Uint8Array): string {
@@ -51,6 +56,9 @@ export function b64urlDecode(s: string): string {
 export function hex(b: Uint8Array): string {
   return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 }
+
+/** 8 字节随机 hex id（订阅 / 自建节点 / 模板记录标识） */
+export const newId = () => hex(crypto.getRandomValues(new Uint8Array(8)));
 
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
@@ -87,6 +95,16 @@ export function base32Decode(s: string): Uint8Array {
   return new Uint8Array(out);
 }
 
+/** 常数时间字符串比较，防时序侧通道；长度不等直接 false（长度不是机密） */
+export function timingSafeEqual(a: string, b: string): boolean {
+  const ea = enc.encode(a);
+  const eb = enc.encode(b);
+  if (ea.length !== eb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ea.length; i++) diff |= ea[i] ^ eb[i];
+  return diff === 0;
+}
+
 // ---------- 密码 ----------
 
 // 免费版 Worker 单次请求 CPU 限 10ms，PBKDF2 迭代数受此约束；付费版可上调
@@ -108,7 +126,7 @@ export async function verifyPassword(password: string, stored: string): Promise<
   const [scheme, iterStr, saltB64, hashB64] = stored.split('$');
   if (scheme !== 'pbkdf2' || !iterStr || !saltB64 || !hashB64) return false;
   const hash = await pbkdf2(password, b64ToBytes(saltB64), Number(iterStr));
-  return bytesToB64(hash) === hashB64;
+  return timingSafeEqual(bytesToB64(hash), hashB64);
 }
 
 // ---------- TOTP ----------
@@ -136,7 +154,7 @@ export async function verifyTotp(secret: string, code: string, window = 1, nowMs
   if (!/^\d{6}$/.test(c)) return false;
   const step = Math.floor(nowMs / 1000 / 30);
   for (let i = -window; i <= window; i++) {
-    if ((await totpAt(secret, step + i)) === c) return true;
+    if (timingSafeEqual(await totpAt(secret, step + i), c)) return true;
   }
   return false;
 }
@@ -215,7 +233,7 @@ export async function getSessionId(secretKey: string, req: Request): Promise<str
   const [sid, ts, sig] = parts;
   if (!/^[0-9a-f]{48}$/.test(sid) || !/^\d+$/.test(ts)) return null;
   if (Number(ts) + SESSION_TTL < Math.floor(Date.now() / 1000)) return null;
-  if ((await hmacHex(secretKey, `${sid}.${ts}`)) !== sig) return null;
+  if (!timingSafeEqual(await hmacHex(secretKey, `${sid}.${ts}`), sig)) return null;
   return sid;
 }
 

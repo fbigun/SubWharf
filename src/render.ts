@@ -1,7 +1,7 @@
 // 输出序列化：内部节点模型 → Clash(Mihomo YAML) / sing-box / URI / base64。
 // 四种输出同源，仅 proxies + 单一 PROXY 组；机场 rules / proxy-groups 一律不透传。
 import type { ProxyNode } from './parse';
-import { b64encode } from './auth';
+import { b64encode, b64urlEncode } from './auth';
 
 export type OutputTarget = 'clash' | 'singbox' | 'base64' | 'uri';
 export type RulesMode = 'none' | 'cn';
@@ -226,10 +226,7 @@ function hostPort(n: ProxyNode): string {
 function nodeUri(n: ProxyNode): string {
   const name = encodeURIComponent(n.name);
   if (n.type === 'ss') {
-    const userinfo = b64encode(`${n.cipher || 'aes-128-gcm'}:${n.password || ''}`)
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+    const userinfo = b64urlEncode(`${n.cipher || 'aes-128-gcm'}:${n.password || ''}`);
     const q = new URLSearchParams();
     if (n.ssPlugin === 'obfs') {
       q.set('plugin', `obfs-local;obfs=${n.ssPluginMode || 'http'}${n.ssPluginHost ? `;obfs-host=${n.ssPluginHost}` : ''}`);

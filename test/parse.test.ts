@@ -66,6 +66,14 @@ describe('URI 解析', () => {
     expect(() => parseNodeUri(`vmess://${b64encode(JSON.stringify(j))}`)).toThrow(/http 伪装/);
   });
 
+  it('vmess net=http（Xray 风格 JSON）按 h2 处理', () => {
+    const j = { v: '2', ps: 'x', add: 'b.com', port: '443', id: 'u1', net: 'http', host: 'b.com', path: '/h2' };
+    const n = parseNodeUri(`vmess://${b64encode(JSON.stringify(j))}`);
+    expect(n.network).toBe('h2');
+    expect(n.wsPath).toBe('/h2');
+    expect(n.wsHost).toBe('b.com');
+  });
+
   it('vless reality + ws', () => {
     const uri =
       'vless://11111111-2222-3333-4444-555555555555@c.com:443?encryption=none&security=reality&sni=c.com&fp=chrome&pbk=PBKKEY&sid=abcd&flow=xtls-rprx-vision&type=ws&path=%2Fws&host=c.com#V%2FR';

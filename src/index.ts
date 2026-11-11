@@ -12,6 +12,7 @@ import {
   otpauthUri,
   recordLoginFail,
   sessionCookie,
+  timingSafeEqual,
   unwrapField,
   verifyPassword,
   verifyTotp,
@@ -21,17 +22,32 @@ import * as subs from './subs';
 import * as tpl from './template';
 import { renderBase64, renderClash, renderSingbox, renderUri, type OutputTarget, type RuleSource, type RulesMode } from './render';
 
+// 免费版 isolate 内存 128MB，入站请求体上限由 Cloudflare zone 决定（免费 100MB），
+// 必须自设上限防止大 body 打爆内存；管理 API 合法负载最大为成批节点 URI（<1MB）
+const MAX_BODY = 1 << 20;
+
 const json = (data: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', ...headers } });
 const err = (message: string, status = 400) => json({ error: message }, status);
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    let res: Response;
     try {
-      return await handle(req, env);
+      res = await handle(req, env);
     } catch (e) {
-      return err(e instanceof Error ? e.message : '服务器内部错误', 500);
+      if (e instanceof BodyTooLargeError) {
+        res = err('请求体过大', 413);
+      } else {
+        // 内部细节（KV 异常消息等）只进日志；客户端统一文案
+        console.error(`${new URL(req.url).pathname}:`, e);
+        res = err('服务器内部错误', 500);
+      }
     }
+    // Worker 自产响应（/api/、/s/）加 nosniff；静态资产请求不经过 Worker，
+    // 其 nosniff / CSP / X-Frame-Options 由 public/_headers 声明
+    res.headers.set('X-Content-Type-Options', 'nosniff');
+    return res;
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(refreshAllAndTemplate(env));
@@ -63,7 +79,12 @@ async function handle(req: Request, env: Env): Promise<Response> {
 // ---------- 公开订阅输出 ----------
 
 async function serveSubscription(env: Env, url: URL): Promise<Response> {
-  const token = decodeURIComponent(url.pathname.slice(3));
+  let token = url.pathname.slice(3);
+  try {
+    token = decodeURIComponent(token); // 畸形 % 序列按原样匹配，查不到链接即 404
+  } catch {
+    // ignore
+  }
   const link = token ? await subs.getLink(env, token) : null;
   if (!link || !link.enabled) return new Response('not found', { status: 404 });
 
@@ -252,7 +273,13 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
   }
 
   if (seg[1] === 'nodes') {
-    if (method === 'GET' && seg.length === 2) return json({ nodes: await subs.listNodes(env) });
+    if (method === 'GET' && seg.length === 2) {
+      // 面板只展示连接字段，凭据不回传
+      const nodes = await subs.listNodes(env);
+      return json({
+        nodes: nodes.map(({ id, node }) => ({ id, node: { name: node.name, type: node.type, server: node.server, port: node.port } })),
+      });
+    }
     if (method === 'POST' && seg.length === 2) {
       const b = await readJson(req);
       if (typeof b?.uris !== 'string' || !b.uris.trim()) return err('缺少节点 URI');
@@ -304,19 +331,19 @@ async function api(req: Request, env: Env, url: URL): Promise<Response> {
   return err('接口不存在', 404);
 }
 
-function invalidRegex(v: unknown): boolean {
-  if (typeof v !== 'string' || !v.trim()) return false;
-  try {
-    new RegExp(v.trim());
-    return false;
-  } catch {
-    return true;
-  }
-}
+// 空串表示不过滤不算非法；编译逻辑与 subs.compileRegex 同源
+const invalidRegex = (v: unknown): boolean => typeof v === 'string' && !!v.trim() && !subs.compileRegex(v);
+
+class BodyTooLargeError extends Error {}
 
 async function readJson(req: Request): Promise<any> {
+  // Content-Length 缺失时也检查实际读取长度（chunked 传输）
+  const declared = Number(req.headers.get('Content-Length') ?? 0);
+  if (declared > MAX_BODY) throw new BodyTooLargeError();
+  const text = await req.text();
+  if (text.length > MAX_BODY) throw new BodyTooLargeError();
   try {
-    return await req.json();
+    return JSON.parse(text);
   } catch {
     return null;
   }
@@ -361,7 +388,7 @@ async function setup(req: Request, env: Env): Promise<Response> {
   const b = await readJson(req);
   if (await env.KV.get('profile')) return err('已初始化，请直接登录', 409);
   if (!b?.setupCode || !b?.password) return err('缺少初始化口令或密码');
-  if (b.setupCode !== env.SETUP_CODE) {
+  if (typeof b.setupCode !== 'string' || !timingSafeEqual(b.setupCode, env.SETUP_CODE)) {
     await recordLoginFail(env);
     return err('初始化口令错误', 403);
   }

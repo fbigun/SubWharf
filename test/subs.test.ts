@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectNodes, collectPool, type LinkRec, type SnapshotRec, type SubRec } from '../src/subs';
+import { collectNodes, collectPool, readTextLimited, type LinkRec, type SnapshotRec, type SubRec } from '../src/subs';
 import type { Env } from '../src/auth';
 
 function kvStub(data: Record<string, unknown>): Env {
@@ -158,5 +158,21 @@ describe('collectPool', () => {
     const r = await collectPool(env2);
     expect(r.nodes).toEqual([]);
     expect(r.skipped).toEqual(['[ghost] 暂无可用快照']);
+  });
+});
+
+describe('readTextLimited', () => {
+  it('限额内正常读取 UTF-8 文本', async () => {
+    expect(await readTextLimited(new Response('中文 abc'), 64)).toBe('中文 abc');
+  });
+
+  it('实际超限抛错并中断读取', async () => {
+    const big = 'x'.repeat(2 * 1024 * 1024 + 1);
+    await expect(readTextLimited(new Response(big), 2 * 1024 * 1024)).rejects.toThrow(/上限/);
+  });
+
+  it('Content-Length 超限时预检直接抛错', async () => {
+    const res = new Response('tiny', { headers: { 'Content-Length': String(2 * 1024 * 1024 + 1) } });
+    await expect(readTextLimited(res, 2 * 1024 * 1024)).rejects.toThrow(/上限/);
   });
 });

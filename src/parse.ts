@@ -1,6 +1,6 @@
 // 订阅解析：URI / base64 / sing-box JSON / Clash YAML → 统一内部节点模型。
 // 覆盖 ss / vmess / vless / trojan / hysteria2 / tuic，未知协议跳过并在结果中说明原因。
-import { b64decode, b64urlDecode } from './auth';
+import { b64decode, b64urlDecode, errMsg } from './auth';
 
 export type ProxyType = 'ss' | 'vmess' | 'vless' | 'trojan' | 'hysteria2' | 'tuic';
 
@@ -73,15 +73,11 @@ export function parseSubscription(content: string): ParseResult {
   return { nodes: [], skipped: ['无法识别订阅内容（不是 URI、base64、sing-box JSON 或 Clash YAML）'] };
 }
 
-function msg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
 function parseClashPart(text: string): ParseResult {
   try {
     return parseClashYaml(text);
   } catch (e) {
-    return { nodes: [], skipped: [`Clash YAML 解析失败：${msg(e)}`] };
+    return { nodes: [], skipped: [`Clash YAML 解析失败：${errMsg(e)}`] };
   }
 }
 
@@ -122,7 +118,7 @@ function parseUriList(text: string): ParseResult {
       nodes.push(parseNodeUri(uri));
     } catch (e) {
       const i = uri.indexOf('://');
-      skipped.push(`${i > 0 ? uri.slice(0, i + 3) : '未知协议'}${msg(e)}`);
+      skipped.push(`${i > 0 ? uri.slice(0, i + 3) : '未知协议'}${errMsg(e)}`);
     }
   }
   return { nodes, skipped };
@@ -264,8 +260,8 @@ function parseVmess(uri: string): ProxyNode {
   const str = (k: string) => (json[k] == null ? '' : String(json[k]));
   const net = str('net') || 'tcp';
   if (net === 'tcp' && str('type') === 'http') throw new Error('不支持的 vmess http 伪装');
-  const netMap: Record<string, ProxyNode['network']> = { tcp: 'tcp', ws: 'ws', grpc: 'grpc', h2: 'h2', httpupgrade: 'httpupgrade' };
-  const network = netMap[net];
+  // 与 sing-box / URI 路径同源：http 传输（Xray 风格 JSON）同样按 h2 处理
+  const network = URI_NET_MAP[net];
   if (!network) throw new Error(`不支持的传输 ${net}`);
   const node: ProxyNode = {
     name: str('ps') || fragName(uri),
@@ -431,7 +427,7 @@ function parseSingboxJson(obj: any): ParseResult {
     try {
       nodes.push(mapSingboxOutbound(o, type, tag));
     } catch (e) {
-      skipped.push(`${tag}：${msg(e)}`);
+      skipped.push(`${tag}：${errMsg(e)}`);
     }
   }
   return { nodes, skipped };
@@ -582,7 +578,7 @@ function parseClashYaml(text: string): ParseResult {
       nodes.push(mapClashProxy(p as any));
     } catch (e) {
       const rec = p as Record<string, YamlValue>;
-      skipped.push(`${String(rec.name ?? rec.type ?? '?')}：${msg(e)}`);
+      skipped.push(`${String(rec.name ?? rec.type ?? '?')}：${errMsg(e)}`);
     }
   }
   return { nodes, skipped };
