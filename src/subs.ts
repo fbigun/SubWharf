@@ -429,15 +429,20 @@ function dedupeNodes(nodes: CollectedNode[]): { nodes: CollectedNode[]; removed:
 
 function uniqueNames(nodes: CollectedNode[]): void {
   const used = new Set<string>();
+  // 重名基名 → 下一次候选序号。没有它时第 k 个重名节点仍从 #2 数起，整体退化成 O(n²)
+  const nextSuffix = new Map<string, number>();
   for (const n of nodes) {
-    if (!used.has(n.name)) {
-      used.add(n.name);
+    const base = n.name;
+    if (!used.has(base)) {
+      used.add(base);
       continue;
     }
-    let i = 2;
-    while (used.has(`${n.name} #${i}`)) i++;
-    n.name = `${n.name} #${i}`;
+    let i = nextSuffix.get(base) ?? 2;
+    // 仍要探测：base 自身可能已含 `#2`，或序号被其他节点占用，候选不保证空闲
+    while (used.has(`${base} #${i}`)) i++;
+    n.name = `${base} #${i}`;
     used.add(n.name);
+    nextSuffix.set(base, i + 1);
   }
 }
 
