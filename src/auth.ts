@@ -25,14 +25,28 @@ export function errMsg(e: unknown): string {
 
 // ---------- base64 / base32 ----------
 
+// 分块颗粒度：atob / btoa 本身很快，慢的是「逐字节过一次 JS」——每字节一次字符串拼接、
+// 每字节一次回调。按 8KB 分块后变成每块一次 JS 操作，CPU 落到内置实现里。
+// 8KB 远低于引擎的 spread / apply 实参上限（十万量级才会爆栈），也远小于一次订阅的内存开销。
+const B64_CHUNK = 8192;
+
 export function bytesToB64(b: Uint8Array): string {
-  let s = '';
-  for (const x of b) s += String.fromCharCode(x);
-  return btoa(s);
+  let bin = '';
+  // subarray 自带截断，最后一块不足 8KB 无需特判
+  for (let i = 0; i < b.length; i += B64_CHUNK) {
+    bin += String.fromCharCode.apply(null, b.subarray(i, i + B64_CHUNK) as unknown as number[]);
+  }
+  return btoa(bin);
 }
 
 export function b64ToBytes(s: string): Uint8Array {
-  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const bin = atob(s); // 非法输入照旧抛 InvalidCharacterError，语义不变
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += B64_CHUNK) {
+    const end = Math.min(i + B64_CHUNK, bin.length);
+    for (let j = i; j < end; j++) out[j] = bin.charCodeAt(j);
+  }
+  return out;
 }
 
 export function b64encode(s: string): string {
