@@ -133,6 +133,51 @@ describe('collectNodes', () => {
     const r = await collectNodes(env2, link({ sources: ['m'] }));
     expect(r.nodes.map((n) => n.name)).toEqual(['[M] HK', '[M] HK #2']);
   });
+
+  // uniqueNames 是模块私有函数：用快照节点名直接当输入序列，经 collectNodes 观察改名结果
+  const renamed = async (names: string[], clean = false) => {
+    const env2 = kvStub({
+      'sub:u': sub('u', 'M', { clean }),
+      'snap:u': snap(names),
+    });
+    const r = await collectNodes(env2, link({ sources: ['u'] }));
+    return r.nodes.map((n) => n.name);
+  };
+
+  describe('uniqueNames 边界语义', () => {
+    it('跳号后回填：a, a, b, a → a, a #2, b, a #3', async () => {
+      expect(await renamed(['a', 'a', 'b', 'a'])).toEqual(['[M] a', '[M] a #2', '[M] b', '[M] a #3']);
+    });
+
+    it('首个基名已被占用：a #2, a, a → a #2, a, a #3', async () => {
+      expect(await renamed(['a #2', 'a', 'a'])).toEqual(['[M] a #2', '[M] a', '[M] a #3']);
+    });
+
+    it('候选被后续名字占用：a, a #2, a → a, a #2, a #3', async () => {
+      expect(await renamed(['a', 'a #2', 'a'])).toEqual(['[M] a', '[M] a #2', '[M] a #3']);
+    });
+
+    it('候选既被占用又产生新基名：a, a, a #2, a #3 → a, a #2, a #2 #2, a #3', async () => {
+      expect(await renamed(['a', 'a', 'a #2', 'a #3'])).toEqual(['[M] a', '[M] a #2', '[M] a #2 #2', '[M] a #3']);
+    });
+
+    it('中文名连号：香港, 香港 #2, 香港, 香港 → 香港 #2/#3/#4', async () => {
+      expect(await renamed(['香港', '香港 #2', '香港', '香港'])).toEqual([
+        '[M] 香港',
+        '[M] 香港 #2',
+        '[M] 香港 #3',
+        '[M] 香港 #4',
+      ]);
+    });
+
+    it('真实路径：清洗后同名的 20 个节点序号连续无洞', async () => {
+      const names = Array.from({ length: 20 }, (_, i) => `🇭🇰 香港 ${String(i + 1).padStart(2, '0')}`);
+      const out = await renamed(names, true);
+      expect(out.slice(0, 4)).toEqual(['[M] 香港', '[M] 香港 #2', '[M] 香港 #3', '[M] 香港 #4']);
+      expect(out[19]).toBe('[M] 香港 #20');
+      expect(new Set(out).size).toBe(20);
+    });
+  });
 });
 
 describe('collectPool', () => {
