@@ -16,6 +16,15 @@
 //
 // 重算方式：改完 src/ 后跑测试。字节数不符时断言直接报出实际字节数；sha16 不符时
 // vitest 的 expected/received 里就是实际值，逐行核对、写回 GOLDEN 表并解释原因。
+//
+// ---------- 基线出处 ----------
+// 基线提交：0ffbf37（不是 ee659eb）。
+// 这张表是在集成分支 npc/subwharf-14 的 0ffbf37 上生成的，即 W2a 的 src/auth.ts /
+// src/subs.ts 改动已合入之后的状态。特意写明这一点：拿 ee659eb 当基线等于用旧代码当
+// 尺子，量出来的差异会把 W2a 的既有改动误判成新引入的回归。
+// 复核方式（任选其一）：
+//   git checkout 0ffbf37 && npx vitest run test/golden.test.ts   # 全绿即基线自洽
+//   git diff --stat 0ffbf37 HEAD -- src/render.ts src/parse.ts src/rename.ts  # 空则输出未漂移
 import { describe, expect, it } from 'vitest';
 import { parseSubscription, type ProxyNode } from '../src/parse';
 import { cleanNodeName } from '../src/rename';
