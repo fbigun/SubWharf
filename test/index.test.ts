@@ -1094,6 +1094,29 @@ describe('请求体上限 1 MiB', () => {
     expect(await body(res)).toEqual({ error: '请求体过大' });
   });
 
+  // 当前口径：readJson 判的是 text.length（UTF-16 码元数），不是字节数。
+  // 这不是本次要改的行为，但必须钉住——重构时若改成按字节计，这条会红。
+  it('chunked 多字节正文：按字符数计口径（1 MiB 个汉字 = 3 MiB 字节仍放行）', async () => {
+    const env = makeEnv();
+    const text = '中'.repeat(1 << 20);
+    expect(new TextEncoder().encode(text).byteLength).toBe(3 * (1 << 20));
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text));
+        controller.close();
+      },
+    });
+    const req = new Request(`${BASE}/api/nodes`, {
+      method: 'POST',
+      body: stream,
+      duplex: 'half',
+      headers: { Cookie: await authed() },
+    } as RequestInit);
+    const res = await worker.fetch(req, env as unknown as Env);
+    expect(res.status).toBe(400); // 未被 413 拦，落到「缺少节点 URI」
+    expect(await body(res)).toEqual({ error: '缺少节点 URI' });
+  });
+
   it('恰好 1 MiB 以内 → 正常处理（不误判）', async () => {
     const env = makeEnv();
     const padding = 'a'.repeat((1 << 20) - 32);
