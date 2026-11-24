@@ -1,0 +1,9 @@
+// 仅供本地 workerd 基准探针使用：node_modules/wrangler dev --config 本文件
+// 不部署、不绑定 KV/域名、不涉及任何 secret。name 加 -bench 后缀避免与生产 Worker 撞名。
+{
+  "name": "subwharf-bench-probe",
+  "main": "./probe.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": [],
+  "observability": { "enabled": false }
+}
