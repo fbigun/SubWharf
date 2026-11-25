@@ -172,6 +172,75 @@ describe('订阅内容解析', () => {
     expect(r.skipped).toEqual([]);
   });
 
+  // ---- 差分：tryBase64 复用 b64ToBytes 后，解码语义必须与逐字节参考实现一致 ----
+  // 参考实现 = 改造前 src/parse.ts:100 的逐字节解码（原样留档，任何语义漂移都会让这组变红）
+  function refTryBase64(text: string): string | null {
+    const t = text.replace(/\s+/g, '');
+    if (!/^[A-Za-z0-9+/\-_]+={0,2}$/.test(t)) return null;
+    try {
+      let s = t.replace(/-/g, '+').replace(/_/g, '/');
+      while (s.length % 4 !== 0) s += '=';
+      const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false })
+        .decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
+      if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(decoded)) return null;
+      return decoded;
+    } catch {
+      return null;
+    }
+  }
+  // 用参考解码把 base64 还原成明文，再走与 parseSubscription 相同的明文分派。
+  // 这样「两实现解码结果一致」可归一化成「两条解析路径的 nodes/skipped 一致」。
+  function parseViaRef(text: string) {
+    const d = refTryBase64(text);
+    if (!d) return { nodes: [], skipped: ['无法识别订阅内容（不是 URI、base64、sing-box JSON 或 Clash YAML）'] };
+    const trimmed = d.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const obj = JSON.parse(trimmed);
+        if (obj && typeof obj === 'object' && Array.isArray(obj.outbounds)) {
+          return parseSubscription(trimmed); // JSON 分派不经过 base64，直接用明文
+        }
+      } catch { /* 按其它格式继续 */ }
+    }
+    if (/^[\t ]*proxies\s*:/m.test(trimmed)) return parseSubscription(trimmed);
+    if (trimmed.includes('://')) return parseSubscription(trimmed);
+    return { nodes: [], skipped: ['无法识别订阅内容（不是 URI、base64、sing-box JSON 或 Clash YAML）'] };
+  }
+
+  const b64Corpus: Array<[string, string]> = [
+    ['URI 列表的 base64', b64encode([ssUri, trojanUri].join('\n'))],
+    ['url-safe 字母表（-_）', b64encode([ssUri, trojanUri].join('\n')).replace(/\+/g, '-').replace(/\//g, '_')],
+    ['非 4 倍长度（b64encode 无 padding 路径）', b64encode('trojan://pw@h:1#X')],
+    ['含换行与空格的 base64', (() => { const b = b64encode([ssUri, trojanUri].join('\n')); return b.slice(0, 40) + '\n  ' + b.slice(40); })()],
+    ['解码后是 Clash YAML', b64encode(clashSample)],
+    ['解码后是 sing-box JSON', b64encode(JSON.stringify({ outbounds: [{ type: 'trojan', tag: 't', server: 's.com', port: 443, password: 'pw' }] }))],
+  ];
+
+  for (const [label, text] of b64Corpus) {
+    it(`base64 解码等价 · ${label}：nodes 与 skipped 逐字段一致`, () => {
+      expect(parseSubscription(text)).toEqual(parseViaRef(text));
+    });
+  }
+
+  it('base64 解码等价 · 非法与非 base64 文本：仍返回 skipped 且文案不变', () => {
+    for (const bad of ['hello world !!', '!!!!', 'a', 'YWJj!!!', '###not-base64###']) {
+      expect(parseSubscription(bad)).toEqual({ nodes: [], skipped: ['无法识别订阅内容（不是 URI、base64、sing-box JSON 或 Clash YAML）'] });
+    }
+  });
+
+  it('base64 解码等价 · ≥100KB 大订阅：节点数与同内容明文路径一致', () => {
+    const cred = b64urlEncode('aes-256-gcm:pw');
+    const lines = Array.from({ length: 2000 }, (_, i) => `ss://${cred}@1.2.3.4:${8388 + (i % 1000)}#N${i}`);
+    const plain = lines.join('\n');
+    const b64 = b64encode(plain);
+    expect(b64.length).toBeGreaterThanOrEqual(100 * 1024);
+    const viaB64 = parseSubscription(b64);
+    const viaPlain = parseSubscription(plain);
+    expect(viaB64.nodes).toEqual(viaPlain.nodes);
+    expect(viaB64.skipped).toEqual(viaPlain.skipped);
+    expect(viaB64.nodes).toHaveLength(2000);
+  });
+
   it('明文 URI 订阅，坏行进入 skipped', () => {
     const r = parseSubscription([ssUri, 'snell://bad', '', trojanUri].join('\n'));
     expect(r.nodes).toHaveLength(2);
