@@ -8,13 +8,44 @@
 
 ---
 
+> ## ⚠️ 事后更正（2026-11-25，以本节为准）
+>
+> 本文写于 W1（基线 `ee659eb`）。其中 §1 表 A、§2 第 2 条、§4.2/§4.3/§4.35、
+> §6、§7.5 把「KV 子请求**确定性突破免费版 50 上限**」判为 **P0**。
+> **该结论不成立，已撤销。** 依据 Cloudflare changelog
+> `post/2026-02-11-subrequests-limit`（2026-02-11）原文：
+>
+> > Workers on the free plan remain limited to **50 external subrequests** and
+> > **1000 subrequests to Cloudflare services** per invocation.
+>
+> 配合 `workers/platform/limits` 免费版两行：
+> `Subrequests per invocation = 50`、`Subrequests to internal services = 1000`。
+> **KV 操作属于 internal services 桶（1000/次），不是 external 桶（50/次）。**
+> 三页 KV 文档（`kv/platform/limits` 的 1000/1000、FAQ 括注「subrequest limit (of 1000)」、
+> `kv/api/read-key-value-pairs` 的「1,000 operations… applies to Workers KV」）四处一致。
+> 因此 `renderAll` 的 51/57/110 次 KV 操作对 1000 有 **9.1× 余量**，并未超限；
+> `/s/{token}` 的 52 次有 19.2× 余量。原文「已确定性突破 50」是把两个桶读成了一个。
+>
+> 下文表格与推导保留为当时的分析记录（时间切片，数字不动），
+> 凡出现「已确定性突破 50」「P0」字样，**一律以本更正块为准**。
+> 真正成立的问题是两条，且与上限是 50 还是 1000 无关：
+>
+> - **List requests 1,000/天**（`kv/platform/pricing`，与 Reads 分行，三页无矛盾）：
+>   `/s/{token}` 每次拉取因 `includeCustom=true` 默认付 1 次 list，日用量 174，余量仅 5.7×。
+> - **串行 KV 读的墙钟**：`/s/{token}` 22 次串行往返 ≈50ms，批量化后 ≈9ms。
+>
+> 另：cron 的 **external** 子请求是另一条独立的桶（50/次，含 redirect 跳数），
+> 但单管理员场景需约 45 订阅 + 3 模板才逼近（`AGENTS.md` 决策 6 不开放多用户），
+> 不构成现实风险，不派卡。本地 workerd 测不出子请求限额，是
+> `workers/testing/miniflare/core/standards` 的已知空缺，不能当作「不存在」。
+
 ## 1. 结论先行
 
 当前 KV 访问有三类问题，优先级完全不同。**最要命的一条初审没提到**：
 
 | # | 问题 | 严重度 | 触发条件 |
 |---|---|---|---|
-| **A** | 单次调用子请求数突破免费版 **50 上限**，且失败静默 | **P0（已确定性突破）** | §4.3 / §4.35 |
+| ~~**A**~~ | ~~单次调用子请求数突破免费版 50 上限，且失败静默~~ **已撤销**：KV 走 1000 桶，未超限（见顶部更正） | ~~P0~~ → 不成立 | 顶部更正 |
 | B | 单次 `/s/` 请求重复读全部 sub + snap，无请求级 memo，热路径用 `list` | P1（List 配额 + 延迟） | 每次客户端拉订阅 |
 | C | `listByPrefix` 逐键串行 `get`，无批量读 | P2（延迟，非配额） | 每次 `list*` 调用 |
 
@@ -22,7 +53,7 @@
 方向对但量级判断错了：
 
 ```
-subrequests 50/次   ← 已超（N≥15,M≥20 必然超，§4.35）
+subrequests 50/次   ← ~~已超~~ 更正：KV 走 1000 桶，未超（见顶部更正；原文此处误判）
 List 1,000/天       ← 5.7× 余量（§4.4）
 Reads 100,000/天    ← 56× 余量（§4.4），根本不是瓶颈
 ```
@@ -40,7 +71,7 @@ Reads 100,000/天    ← 56× 余量（§4.4），根本不是瓶颈
 | KV Writes（不同键） | 1,000 / 天 | 同上 |
 | **List requests** | **1,000 / 天**（与 Reads **分开计**） | `developers.cloudflare.com/kv/platform/pricing/` |
 | 存储 | 1 GB | limits |
-| **Subrequests / invocation** | **50 / 次调用** | `developers.cloudflare.com/workers/platform/limits/` |
+| **Subrequests / invocation** | **50 external + 1000 Cloudflare services** / 次调用（KV 属后者，详见顶部更正） | `developers.cloudflare.com/workers/platform/limits/`；`changelog/post/2026-02-11-subrequests-limit` |
 | 并发出站连接 | 6 / 请求 | 同上 |
 
 三条被普遍误解的语义，直接决定后面的账：
@@ -48,9 +79,11 @@ Reads 100,000/天    ← 56× 余量（§4.4），根本不是瓶颈
 1. **`list()` 不计入 Reads，单独记 List requests。** 官方 pricing 页把
    「Keys read 100,000/day」与「List requests 1,000/day」列为两行。
    → **一次 `list` 的代价在配额上等价于 1 次读，但走的是 1,000/天 的紧口袋。**
-2. **KV 操作计入 subrequests。** 官方 Workers limits 页明确：「a subrequest is any
-   request a Worker makes using the Fetch API **or to Cloudflare services like R2,
-   KV, or D1**」。→ 50 上限**同时约束** KV 调用次数，不只是 `fetch`。
+2. **KV 操作计入 subrequests，但走 1000 桶（已更正）。** 官方 Workers limits 页原文：「a
+   subrequest is any request a Worker makes using the Fetch API **or to Cloudflare
+   services like R2, KV, or D1**」；同页两行分别为 `50 external` 与 `1000 internal`。
+   KV 属 internal services → 免费版 **1000/次**（changelog 2026-02-11 四处一致）。
+   **原作者把 50 当成 KV 上限，是本 ADR 的定性错误；正确上限是 1000（见顶部更正）。**
 3. **批量读存在，但按 key 计费。** 官方 pricing：「Bulk read operations are billed by
    the amount of keys read」。`env.KV.get([k1...k100])`（上限 100 键，
    `kv/api/read-key-value-pairs/`）**只算 1 个 subrequest，但仍算 N 次 Read**。
@@ -97,7 +130,7 @@ src/template.ts:127,131,136,180,183,229,259,264,276  template/tpl 读写删
 npx vite-node .probe/final.ts
 ```
 
-### 4.2 单次请求的子请求数（硬上限 50）
+### 4.2 单次请求的子请求数（原记「硬上限 50」；KV 实为 1000，见顶部更正）
 
 **N=5，M=10，L=4**（一个"正常用了一阵"的个人实例）：
 
@@ -126,7 +159,7 @@ npx vite-node .probe/final.ts
 > `/api/links`=5、`/api/templates`=9，**均未超 50**。
 > 真正单次调用即超限的是 **cron 与 `syncTemplate`**（见 4.3）。
 
-### 4.3 已确定性突破 50 的位置：`renderAll`
+### 4.3 原判「已确定性突破 50」的位置：`renderAll`（结论已撤销，见顶部更正）
 
 `renderAll`（`template.ts:240-255`）在**一次调用**里：
 `listTemplates`(1 list + T get) → `listLinks`(1 list + L get) → 每个可渲染链接
@@ -160,7 +193,7 @@ npx vite-node .probe/final.ts
 
 这条直接对应 `AGENTS.md` 工作约定里「静默成功比失败更危险」。
 
-### 4.35 补充发现：「按需重建兜底」在超限区间同时失效
+### 4.35 补充发现：「按需重建兜底」在原判超限区间同时失效（前提已撤销，见顶部更正）
 
 `index.ts:68` 的注释为吞错给出了理由：
 
@@ -250,7 +283,7 @@ npx vite-node .probe/final.ts
 已经确定性超限（§4.3）。三个约束的相对紧度：
 
 ```
-subrequests 50/次   ← 已经超了（§4.3）
+subrequests 50/次   ← ~~已经超了~~ 更正：KV 走 1000 桶，未超（见顶部更正；原文此处误判）
 List 1,000/天       ← 5.7× 余量，客户端轮询一多就破
 Reads 100,000/天    ← 56× 余量，非瓶颈
 ```
@@ -395,7 +428,7 @@ export function createKv(env: Env): KvWriter  // 每个 fetch/scheduled 调用�
 
 ## 7.5 对初审候选问题 5 的结论（失败静默，与 KV 强相关）
 
-> **候选问题 5：`renderAll` / `syncTemplate` 吞异常 —— 结论：成立，且严重度是 P0。**
+> **候选问题 5：`renderAll` / `syncTemplate` 吞异常 —— 结论：成立（违反「静默成功比失败更危险」），但严重度 P0 已撤销**：P0 的前提「子请求超限」不成立（KV 走 1000 桶，见顶部更正）；吞错本身仍应按 P2 处理。
 
 三处证据，逐条实跑：
 
@@ -415,7 +448,7 @@ export function createKv(env: Env): KvWriter  // 每个 fetch/scheduled 调用�
 所以「静默」在这里不是"降级以避免报错"，而是**把一个本应上报的容量问题
 掩盖成了随机 500**。
 
-按 `AGENTS.md` 工作约定「静默成功比失败更危险」——**违反，判 P0。**
+按 `AGENTS.md` 工作约定「静默成功比失败更危险」——**违反；~~判 P0~~ 更正：P0 前提不成立，降为 P2（见顶部更正）。**
 
 需要补充的边界：吞错**本身**不是无理由的。模板缓存确实是可重建的派生数据，
 "单链接渲染失败不该拖垮其他链接"这个意图是对的。
@@ -439,7 +472,7 @@ export function createKv(env: Env): KvWriter  // 每个 fetch/scheduled 调用�
 - 「`/s/{token}` 每次客户端拉取都重跑」—— **成立**，且 `Cache-Control: no-store`
   （`index.ts:105`）保证 CDN 也不兜
 - 「KV 读配额 10 万/天」—— **部分不成立**：Reads 余量 98%，不是瓶颈。
-  **真正先撞的是 subrequests 50/次（已确定性突破，§4.3）与 List 1,000/天。**
+  **真正的问题是 List 1,000/天（5.7× 余量）与串行读墙钟**（原写「subrequests 50/次已确定性突破」系误判，KV 走 1000 桶，见顶部更正）。
 
 初审给的「缺请求级 memo 与批量读策略」方向正确，是正确解的一部分，
 但不足以覆盖 A；A 需要的是「**任何单次调用都不得随 N/M/L 线性增长**」这条更强的约束。
