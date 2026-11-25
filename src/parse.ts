@@ -1,6 +1,6 @@
 // 订阅解析：URI / base64 / sing-box JSON / Clash YAML → 统一内部节点模型。
 // 覆盖 ss / vmess / vless / trojan / hysteria2 / tuic，未知协议跳过并在结果中说明原因。
-import { b64decode, b64urlDecode, errMsg } from './auth';
+import { b64ToBytes, b64decode, b64urlDecode, errMsg } from './auth';
 
 export type ProxyType = 'ss' | 'vmess' | 'vless' | 'trojan' | 'hysteria2' | 'tuic';
 
@@ -97,7 +97,7 @@ function tryBase64(text: string): string | null {
   try {
     let s = t.replace(/-/g, '+').replace(/_/g, '/');
     while (s.length % 4 !== 0) s += '=';
-    const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
+    const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(b64ToBytes(s));
     // 解码结果混有不可打印控制字符视为非文本订阅
     if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(decoded)) return null;
     return decoded;
