@@ -56,6 +56,48 @@ Cloudflare 官方文档 `workers/observability/logs/workers-logs/`（抓取于 2
 而本仓 `wrangler.jsonc` **没有** `observability` 段（实测 `grep observability wrangler.jsonc` 空），
 即走默认值——**默认就在记录**。故 `/s/{token}` 的 token 会作为 URL 的一部分进 Workers Logs。
 
+### 0.1b M1 的可复制变更（拍板后已定型，执行时照抄）
+
+写域只有 `.cnb.yml`，新增一段 `pull_request`。放在 `main:` 下（不是 `$` 下——PR 事件按目标分支
+匹配配置，只有打到 `main` 的 PR 才该跑这条）：
+
+```yaml
+main:
+  # 合并前门禁：PR 创建 / 重新打开 / 源分支 push 时触发。
+  # 不 imports 任何密钥仓库——pull_request 是不可信事件，且本门禁不需要部署凭据。
+  # volumes 用 copy-on-write-read-only：PR 并发时不回写 npm 缓存。
+  pull_request:
+    - name: 合并前检查
+      docker:
+        image: node:24
+        volumes:
+          - /root/.npm:copy-on-write-read-only
+      stages:
+        - name: 安装依赖
+          script: npm ci --no-audit --no-fund
+        - name: 类型检查
+          script: npx tsc --noEmit
+        - name: 单元测试
+          script: npx vitest run
+```
+
+三处刻意的取舍：
+
+- **不写 `ifModify`**：文档改动（如本 ADR 的两个 PR）也该过一遍 `tsc + vitest`，成本 5s，
+  省它反而让"文档 PR 一律绿灯"成为习惯
+- **不并到 main push 的那条流水线**：main push 的任务里带着 `wrangler deploy` 与密钥 `imports`，
+  复用它会顺带把 PR 拖进凭据面
+- **不跑 bench / 覆盖率**：bench 对机器差异敏感（`vitest.bench.config.ts` 注释已写明不进 CI 全量），
+  覆盖率属 M2
+
+**合并可行性已实测**：把上面这段插进现有 `.cnb.yml` 的 `main:` 之后，用 `yaml` 解析：
+`main` 下事件从 `["push"]` 变 `["pull_request","push"]`，`push` 仍是原来的 2 个任务
+（`同步源码到 GitHub` / `构建与部署`）未被破坏，`$` 下的 `push`/`tag_push` 不受影响，
+新任务的 `imports` 为空。
+
+**本条不做的验证**：M1 的红色验收（改一位 sha → 流水线红）必须在**真实 PR 上跑一次**，
+本 ADR 无凭据、无流水线触发权限，故 §6 的验收命令保持原样，标注为「执行卡内完成」。
+
 ### 0.2 落地形态（两处都已实测可用）
 
 1. **代码侧归一**（`src/index.ts`，1 个函数 + 1 行调用）：`/s/` 前缀统一记成 `/s/{token}`，
@@ -343,14 +385,23 @@ All files    |   96.84 |    80.48 |     100 |   96.84
 - 写域：`.cnb.yml`
 - 内容：`pull_request` 事件（glob `**`，覆盖所有源分支含 `npc/*`）→ 单任务
   `npm ci → npx tsc --noEmit → npx vitest run`；**不 imports 任何密钥仓库**
-- 顺带：`docker.volumes: /root/.npm:copy-on-write`（CNB 官方推荐做法，缓解 A2）
+- 顺带：`docker.volumes: ["/root/.npm:copy-on-write-read-only"]`（缓解 A2）。
+  **注意类型选的是 `copy-on-write-read-only` 而不是 `copy-on-write`**：CNB 文档「流水线缓存」明确写
+  「PR 事件可改用 `copy-on-write-read-only` 类型使缓存只读，避免并发写入冲突」；本项目 PR 会并发
+  （NPC 多角色分支），写回缓存会让并发 PR 互相覆盖 `node_modules` 指纹。只读复用即可，
+  PR 不需要回写。
 - **已拍板（§0 D1）**：目标分支 `main` 设为保护分支，勾选「需要通过状态检查」，
   **不勾**「需要评审人批准」。据 CNB 文档「触发规则」：
   `pull_request` 在 PR 创建、重新打开、源分支 push 时触发，`pull_request.mergeable`
   则要求目标分支是保护分支且勾了状态检查——两者分工是「跑检查」与「拦住合并」，
   M1 两件都要配置，缺前者没结果、缺后者拦不住。
-- 配置来源提醒：`pull_request` 的 `.cnb.yml` **取自预合并后的 commit**（即 PR 分支自身的配置），
-  故分支上改 `.cnb.yml` 会在下一次 push 时生效，无需先合到 main 才能验证门禁。
+- 配置来源提醒（据 CNB 文档「触发规则」的版本选择表）：`pull_request` 使用
+  **预合并后的 Commit**（PR 源分支合入目标分支的结果），故分支上改 `.cnb.yml` 会在下一次 push 时
+  按**该分支的配置**执行，无需先合到 main 才能验证门禁；而 `pull_request.target` / `mergeable`
+  用的是「合并前目标分支最新 Commit」。M1 只需要前者。
+- 安全口径（同文档「不可信事件」）：`pull_request` 属于**不可信事件**，触发令牌 `CNB_TOKEN` 限定在
+  当前仓库、且流水线引用的外部文件必须用 `allow_events` 显式声明。本卡 PR 流水线不 `imports`、
+  不引用任何外部文件，因此不受这条约束——**这是"不 imports 密钥仓库"之外的第二条理由**。
 - **验收**：在分支上故意把 `test/golden.test.ts` 某行 sha 改 1 位 → 推 PR →
   流水线**红**；改回 → **绿**。贴两次流水线链接。
 - **失败即否决**：若 90s 内跑不完 M1 不成立，需回到方案 A 的纯 `tsc + vitest`（去掉 install 缓存调优前先量）。
@@ -507,5 +558,6 @@ M3 的"golden sha 不变"就只能靠人肉核对。
 | R4 路径二：invocation log 记 `<Method> <URL>` | `curl -s https://developers.cloudflare.com/workers/observability/logs/workers-logs/ \| grep -o "the request URL"`；`grep -c observability wrangler.jsonc` → 0（走默认，默认开启） |
 | §0.2 归一后日志实参 | 同一 500 场景 → `{"event":"unhandled","path":"/s/{token}","err":"boom"}`（不含 token） |
 | `observability.logs.invocation_logs` / `redact_query_string` 存在 | `node -e "const s=require('./node_modules/wrangler/config-schema.json');console.log(Object.keys(s.definitions.Observability.properties.logs.properties))"` → 含 `invocation_logs`；`Object.keys(s.definitions.Observability.properties)` → 含 `redact_query_string` |
+| M1 片段可安全合并进现有 `.cnb.yml` | 把 §0.1b 的片段插到 `main:` 后，`yaml` 解析 → `Object.keys(d.main)` 由 `['push']` 变 `['pull_request','push']`，`d.main.push.length` 仍为 2，新任务 `imports` 为空；文档命令：见 §0.1b 末段 |
 | 加了 observability 段后包体不变 | `npx wrangler deploy --dry-run --outdir /tmp/out2` → 104.78 KiB / gzip 27.95 KiB |
 | 既有 4 处 console spy 是否匹配文案 | `grep -n "spyOn(console, 'error')" test/index.test.ts` → 1149/1163/1361/1373，断言均为 `toHaveBeenCalled()` |
