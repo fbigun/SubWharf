@@ -1,11 +1,77 @@
 # ADR-005：仓库文件结构——问题在 test/ 与 docs/，不在 src/
 
-- 状态：建议采纳（待技术负责人拍板）
+- 状态：**已采纳**（2026-11-26 拍板，决策见 §0）
 - 日期：2026-11-26
 - 基线提交：`5a130da`（main）
 - 写域：`docs/arch/**`；`test/**` 与 `README.txt` 的改动列在里程碑卡，不在本文件内执行
 - 相关：`AGENTS.md`「工作约定」、`adr-001-module-boundaries.md`（模块分层）、
   `adr-004-engineering-practices.md`（闸门）、`roadmap.md`（已排期卡片）
+
+---
+
+## 0. 决策记录（2026-11-26 拍板）
+
+- 决策人：技术负责人（@fbigun）：「按你的建议来」
+- 效力：本节高于下文，冲突处以本节为准
+
+| # | 待拍板项 | 拍板结论 |
+|---|---|---|
+| D1 | M2（KV 桩统一）现在做还是等 | **现在做**。两文件、纯 `test/`，`src/` 零改动；它修的是「测试对某类回归无效」这个缺陷，不是整洁度 |
+| D2 | M4 的拆分粒度 | **按端点族切 7 份 + `support.ts`**（原方案）。「一文件对一 `src/` 模块」否决——`index.test.ts` 测 27 个端点，按模块切根本切不动 |
+| D3 | golden 表以哪套为准 | **以 `test/golden.test.ts` 的 `GOLDEN` 表为唯一真值**，`roadmap.md` §4 那张表改为指针（已在本文同批 PR 中执行，见 §0.3） |
+| D4 | M1/M3/M5/M6 是否照排 | 照排，M6 仍压到 W5 之后 |
+
+### 0.1 M2 的复核：变异实验比原稿更强
+
+原稿给的是「换桩前 21 项全绿、换桩后 18 failed | 3 passed」。本次把两个文件都实际换过一遍
+（`@fakes/env` 的 `makeEnv`），并重跑了同一变异（删掉 `src/subs.ts` 两处 `KV.get(..., 'json')`
+的 `'json'` 实参）：
+
+| 场景 | 用例结果 |
+|---|---|
+| 换桩后、不施加变异 | `subs.test.ts` **21 passed**；`template.test.ts` **15 passed**（共 36 项全绿） |
+| 换桩后、施加变异 | `subs.test.ts` **18 failed / 3 passed**；`template.test.ts` **3 failed / 12 passed** |
+
+即：两个文件换桩后都对「漏写 `type` 反序列化」这一回归敏感，且换桩本身不改变行为
+（不施加变异时 36 项全绿、数量不变）。**换桩是纯删行**——`template.test.ts` 的
+`kvStub` 返回的 `store` 在 6 处调用里全部只解构 `env`，`store` 从未被使用。
+
+### 0.2 M4 的复核：拆分前提已实测
+
+在 `test/api/` 下建一个临时用例，`npx vitest run` 从 9 files / 288 tests 变成
+**10 files / 289 tests**（验证后已删）。说明默认 include 能抓到嵌套子目录，
+拆分不需要动 `vitest` 配置。
+
+用例全名 diff 的两条前提也复核过：`--reporter=json` 两次运行结果完全一致（无随机序）；
+288 个 `fullName` 两两不重复。
+
+### 0.2b 顺手校正原稿的三个计数（同一条命令，口径更严）
+
+原稿的「136 处行号锚点（130 指向 `src/*.ts`、6 指向 `test/*.ts`）、其中 85 处指向 W5 文件」
+在复核时偏大，原因是 `grep "\\.ts:"` 把非锚点用法也数进去了（如 ADR-001 架构图里的
+`codec.ts:` 标签、以及文档自己写的 grep 示例）。换成只认「文件名 + 冒号 + 数字」的模式：
+
+```bash
+grep -rohE "[a-zA-Z0-9._-]+\.(ts|js):[0-9]+" docs/ | wc -l      # 131，原稿 136
+grep -rohE "[a-zA-Z0-9._-]+\.(ts|js):[0-9]+" docs/ | awk -F: '{print $1}' | grep -v '\.test\.ts' | wc -l   # 125，原稿 130
+... | grep -E '\.test\.ts' | wc -l                              # 6，与原文一致
+... | grep -E '^(auth|parse|subs|template)\.ts' | wc -l          # 80（61%），原稿 85（63%）
+```
+
+结论不变（63% → 61% 同量级，M1 的优先级不因此改），但**验收命令必须用上面这条严口径**，
+否则 M1 完成后用原稿的宽口径验收永远不会归零。这是「文档里的数字必须由一条能复跑的命令产出」
+的又一次实例。
+
+### 0.3 D3 的落地：真值分叉已修掉
+
+`roadmap.md` §4 的那张 8 行表已删除，改为「唯一真值在 `test/golden.test.ts` 的 `GOLDEN` 表」
++ 复核命令。理由就是原稿报的那个事实：文档 8 行与代码 8 行没有一行相同，而代码那套今天能跑、
+文档那套的生成脚本从未入库。**不再复制数字，只留指针**——这样它不会再漂。
+
+顺带把一个易混淆点写进指针：`test/golden.test.ts` 的基线提交是 `0ffbf37`（不是 `ee659eb`），
+本次实测在 `0ffbf37` 与 `5a130da` 两个提交上跑该文件均 10 项全绿，
+且 `git diff ee659eb..main -- src/parse.ts` 只有 2 行 import/调用替换（`b64ToBytes` 复用），
+输出未漂移——这三条合起来才说明「基线自洽」，单看 sha 相等不足以证明。
 
 ---
 
@@ -21,7 +87,7 @@
 |---|---|---|---|
 | `src/` | 7 | 3174 | ✅ 每个文件一个职责，最大 `parse.ts` 991 行有内部接缝但不构成失败场景 |
 | `test/` | 25 | 4578 | ⚠️ 一个文件占 1550 行 / 158 项；KV 桩 4 份实现，其中 1 份对某类回归完全无效 |
-| `docs/` | 7 | 2230 | ⚠️ 136 处行号锚点；14 处引用从未入库的脚本；README 零处指向它 |
+| `docs/` | 7 | 2230 | ⚠️ 131 处行号锚点；14 处（`main` 口径）引用从未入库的脚本；README 零处指向它 |
 | `public/` | 5 | 1044（另 vendor 2297） | ✅ 731 行原生 JS 分 10 个 section、最长 171 行，拆了只会增加请求数 |
 | 根目录 | 10 文件 + 5 目录 | — | ✅ 全是项目必需项；唯一缺项是 `package.json` 的 `engines`（见 §6 M3） |
 
@@ -132,9 +198,9 @@
 
 | 实测项 | 数字 | 后果 |
 |---|---|---|
-| `file.ts:行号` 形式锚点 | **136 处**（130 指向 `src/*.ts`，6 指向 `test/*.ts`） | 任何 `src/` 重排即失效 |
-| 其中指向 W5 计划拆分/缩减的文件（`auth`/`parse`/`subs`/`template`） | **85 处（63%）** | W5 落地即 63% 失效 |
-| `.probe/*.ts` 引用 | **14 处 / 7 个文件** | `git log --all` 查无记录，**从未入库**；`npx vite-node .probe/final.ts` 跑不了 |
+| `file.ts:行号` 形式锚点 | **131 处**（125 指向 `src/*.ts`，6 指向 `test/*.ts`）※原稿 136/130/85，口径见 §0.2b | 任何 `src/` 重排即失效 |
+| 其中指向 W5 计划拆分/缩减的文件（`auth`/`parse`/`subs`/`template`） | **80 处（61%）** | W5 落地即 61% 失效 |
+| `.probe/*.ts` 引用 | `main` 上 **14 处**、引用 **7 个文件**（当前分支 28 处，含本文自身） | `git log --all` 查无记录，**从未入库**；`npx vite-node .probe/final.ts` 跑不了 |
 | `vite-node` 是否在 `devDependencies` | **否**（靠 vitest 传递依赖） | 复现命令依赖一个未声明的依赖 |
 | `README.txt` 提到 `docs/` | **0 处** | 208 行 README 读完不知道有 ADR |
 | `roadmap.md` §4 的 8 行 golden sha vs `test/golden.test.ts` 的 GOLDEN 表 | **8 项全不同**（如 `renderClash(rules=none)` 1631/`c78a566…` vs 1684/`ad0d497…`） | 文档要求"逐行对比"，但对比对象是两套数，指令本身执行不了 |
@@ -233,6 +299,9 @@ docs/
 | S2 | **锚点用符号名，不用行号**。文档引用代码写 `` `subs.listByPrefix` ``，不写「文件 + 冒号 + 行号」 | `grep -rnE "\.ts:[0-9]+" docs/ --include=*.md` → 空（基线快照表例外，见 §5.3） |
 | S3 | **测试文件上限 450 行**（超了按 describe 边界切） | `find test -name '*.test.ts' \| xargs wc -l \| awk '$1>450'` → 空 |
 
+S2 的例外在 §0.3 已收敛为一条：**基线快照不复制到文档**，只留指针——于是这一条不再需要
+「基线快照表例外」的括号豁免，规则本身可以写成「docs 里零处 `file:line`」。
+
 S3 的门槛按"现状最大健康文件"往上一档取（408 → 450），不是拍脑袋定一个漂亮数字：
 平铺的 8 个测试文件里，除 `index.test.ts`（1550 行）外 6 个 ≤ 278 行；
 唯一 408 行的 `parse.test.ts` 对应 991 行的 `parse.ts`，比例 1:2.4 合理——
@@ -281,8 +350,11 @@ S3 的门槛按"现状最大健康文件"往上一档取（408 → 450），不�
 - 新增 `docs/README.md`：现有全部 ADR（含状态与一句话结论）+ `roadmap.md` + `docs/perf/` 三篇，
   标阅读顺序（"先 ADR-004 看闸门，再 roadmap 看排期，ADR-001~003 是细节"）
 - `README.txt:九` 末尾加一行：`docs/  设计决策（ADR）与性能基线，入口 docs/README.md`
-- 136 处「文件 + 冒号 + 行号」→ 符号名（如列表读取那处改为 `subs.listByPrefix`）
-- **验收**：`grep -rnoE "[a-zA-Z0-9._-]+\.(ts|js):[0-9]+" docs/ --include=*.md | wc -l` → 0（基线快照的引用行除外）
+- **131 处**「文件 + 冒号 + 行号」→ 符号名（如列表读取那处改为 `subs.listByPrefix`）
+- **验收**（严口径，见 §0.2b）：
+  `grep -rohE "[a-zA-Z0-9._-]+\.(ts|js):[0-9]+" docs/ | wc -l` → **0**（当前 131）
+  另加 `grep -roh "\.ts:" docs/*/*.md | wc -l` 交叉核对 → 0（当前 136，含架构图标签这类非锚点用法，
+  一并清掉，避免下次再用宽口径统计时数字对不上）
 
 ### M2 · 测试桩统一
 
@@ -292,6 +364,8 @@ S3 的门槛按"现状最大健康文件"往上一档取（408 → 450），不�
   - `template.test.ts`：把 21 行 `kvStub` 换成 `const kvStub = (data) => ({ env: makeEnv(data) })`
     → **15 项全绿**。该文件的 `store` 返回值**从未被解构使用**（6 处调用全是 `const { env } = kvStub(...)`），
     所以连 `FakeKV.read()` 都用不上，改动就是删 20 行
+- **已拍板（§0 D1）：现在做。** 复核数字见 §0.1：换桩后 36 项全绿，施加变异后
+  `subs.test.ts` 18 failed / `template.test.ts` 3 failed
 - **验收**：
   1. `grep -rn "KV: {" test --include=*.ts` 输出为空
   2. `npx vitest run` 仍 **288 项全绿**（数量不得变）
@@ -329,6 +403,8 @@ dump > /tmp/after.txt    # 改动后再跑一次
 diff /tmp/before.txt /tmp/after.txt && echo "用例集合逐条一致"
 ```
 
+- **已拍板（§0 D2）：按端点族切 7 份 + `support.ts`。** 「一文件对一 `src/` 模块」否决：
+  `index.test.ts` 测 27 个端点，按模块切切不动
   拆分允许**改变**的：文件路径。**不允许**改变的：用例全名、断言内容、288 这个总数。
   已实测两条前提：该 dump 两次运行结果**完全一致**（无随机序），
   288 个 `fullName` **两两不重复**（否则 diff 会掩盖重名）。
@@ -341,7 +417,15 @@ diff /tmp/before.txt /tmp/after.txt && echo "用例集合逐条一致"
 - `.probe/{q5,silent,badjson,dangling,breakeven}.ts` → 各自对应 `roadmap.md` 的一张卡，
   **随卡落地时入库**，不提前搬（避免入库即陈旧，A3 的风险控制）
 - **验收**：`npx vitest run --config vitest.bench.config.ts test/probe/` 可跑通；
-  `docs/` 里不再出现 `.probe/` 字符串
+  `grep -rc "\.probe/" docs/ | grep -v ':0$'` 为空（当前 28 处，分布：
+  `adr-002` 8 / `roadmap` 8 / 本文 12——本文里的 12 处是描述缺陷本身，**保留**，
+  该命令的判定要排除 `adr-005-repo-layout.md` 自身，或改成只查 `adr-002` 与 `roadmap`）
+
+> 修正原稿的两处计数：`.probe/` 在 `docs/` 里是 **28 处**（`grep -ro "\.probe/" docs/ | wc -l`），
+> 不是 14 处；14 是 `main` 分支上的数量（`git grep -o "\.probe/" main -- docs/ | wc -l`），
+> 本文新增的 12 处也被算进了当前计数。同理「7 个文件」指的是被引用的探针文件数
+> （`final/golden/q5/silent/badjson/dangling/breakeven` 共 7 个），不是文档数。
+> M5 的验收命令因此必须排除本文自身，否则天然不归零。
 
 ### M6 · `parse.ts` 抽 `yaml-lite.ts`（W5 之后）
 
@@ -377,7 +461,7 @@ M1/M2/M3 写域互不重叠，可并行；M4 依赖 M2（`support.ts` 要指向�
 | R3 | 与在途 PR #27（`docs/engineering-adr-004`）抢 `docs/arch/` 行号 | **高** | 低 | M1 只改**锚点形态**（行号→符号名），不改 ADR 正文结论；#27 合入后 rebase 一次即可，冲突段集中在被引用行 |
 | R4 | M5 入库的探针三个月后无人维护，变成第二套陈旧断言 | 中 | 中 | A3 的证伪条件：3 个月内 > 4 个探针文件无改动 → 回退到"文档内嵌代码块" |
 | R5 | M6 拆 `parse.ts` 触发 golden sha 变化 | 中 | **高** | 任一行 sha 变即 revert；若确有行为变化，逐字节解释后再来（同 `roadmap.md` R5） |
-| R6 | M1 的 136 处锚点改造引入错误引用（符号名写错） | 中 | 低 | 抽查 20%（27 处）：`grep -n "export \?\(async \)\?function <符号名>" src/*.ts` 能命中即通过 |
+| R6 | M1 的 131 处锚点改造引入错误引用（符号名写错） | 中 | 低 | 抽查 20%（26 处）：`grep -n "export \?\(async \)\?\(function\|const\) <符号名>" src/*.ts` 能命中即通过 |
 
 降级触发线（写死，避免临场判断）：
 
@@ -419,12 +503,13 @@ M1/M2/M3 写域互不重叠，可并行；M4 依赖 M2（`support.ts` 要指向�
 | `index.test.ts` 1550 行 / 158 项 / 24 个 describe | `wc -l test/index.test.ts`；`npx vitest run test/index.test.ts --reporter=json \| jq .numTotalTests` → 158；`grep -c "^describe(" test/index.test.ts` → 24 |
 | 288 项测试、用例名两两唯一 | `npx vitest run --reporter=json \| jq .numTotalTests` → 288；全名去重计数见 §6 M4 的 dump 脚本 |
 | KV 桩 4 处实现 | `grep -rn "KV: {" test --include=*.ts`、`grep -rn "makeStubEnv\|new FakeKV" test --include=*.ts` |
-| 变异实验（`subs.test.ts` 全绿通过） | 删掉 `subs.listByPrefix` / `subs.getJson` 里的 `'json'` 实参 → `npx vitest run test/subs.test.ts` → 21 passed |
+| 变异实验：换桩前 `subs.test.ts` 全绿通过（缺陷被掩盖） | 删掉 `src/subs.ts` 两处 `KV.get(..., 'json')` 的 `'json'` 实参 → `npx vitest run test/subs.test.ts` → 21 passed |
+| 变异实验：换桩后同一变异变红（M2 的核心价值证明） | 同上变异 → `subs.test.ts` **18 failed / 3 passed**、`template.test.ts` **3 failed / 12 passed**；不施加变异时两文件 **36 passed** |
 | `src` 14 条模块间依赖边 | `for f in src/*.ts; do for m in auth parse rename render subs template; do grep -q "from '\./$m'" $f && echo "$f -> $m"; done; done` |
 | `parse.ts` YAML 层 342 行、区间内 `ProxyNode` 0 次 | `sed -n '547,888p' src/parse.ts \| wc -l` → 342；`sed -n '547,888p' src/parse.ts \| grep -c ProxyNode` → 0 |
-| docs 136 处行号锚点（130 指向 src、85 指向 W5 文件） | `grep -ohE "[a-zA-Z0-9._-]+\.(ts\|js):[0-9]+" docs/*/*.md \| awk -F: '{print $1}' \| sort \| uniq -c` |
-| `.probe/` 引用 14 处、从未入库 | `grep -o "\.probe/" docs/*/*.md \| wc -l`；`git log --all --oneline -- '.probe/'`（空） |
+| docs **131** 处行号锚点（125 指向 src、80 指向 W5 文件）——原稿写 136/130/85，见 §0.2b | `grep -rohE "[a-zA-Z0-9._-]+\.(ts\|js):[0-9]+" docs/ \| wc -l` → 131；再接 `\| awk -F: '{print $1}' \| grep -vc '\.test\.ts'` → 125；`\| grep -E '^(auth\|parse\|subs\|template)\.ts' \| wc -l` → 80 |
+| `.probe/` 在 `main` 上引用 14 处、当前分支 28 处、从未入库 | `git grep -o "\.probe/" main -- docs/ \| wc -l` → 14；`grep -ro "\.probe/" docs/ \| wc -l` → 28；`git log --all --oneline -- '.probe/'`（空） |
 | `README.txt` 提 `docs/` 0 处 | `grep -c "docs/" README.txt` → 0 |
-| golden 表两套数字不同 | `sed -n '/^| \`renderClash/,/^$/p' docs/arch/roadmap.md` 对比 `sed -n '142,151p' test/golden.test.ts` |
+| golden 表两套数字不同（**已按 D3 修复**：roadmap §4 改为指针，表已删） | 修复前可用 `git show 5a130da:docs/arch/roadmap.md \| sed -n '/^| \`renderClash/,/^$/p'` 对比 `sed -n '/^const GOLDEN/,/^};/p' test/golden.test.ts`；修复后 `grep -c 'c78a566' docs/arch/roadmap.md` → 0 |
 | Node 版本冲突 | `node -e "console.log(require('./package-lock.json').packages['node_modules/wrangler'].engines)"` → `{ node: '>=22.0.0' }`；`grep -n "Node 18" README.txt` |
 | 测试子目录可被默认 include 抓到 | 在 `test/api/` 建临时用例 → `npx vitest run` → 10 files / 289 tests（验证后删除） |
