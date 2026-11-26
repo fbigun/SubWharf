@@ -1,10 +1,91 @@
 # ADR-004：工程实践基线——把已有验收判据接进合并前闸门
 
-- 状态：建议采纳（待技术负责人拍板）
+- 状态：**已采纳**（2026-11-26 拍板，决策见 §0）
 - 日期：2026-11-26
 - 基线提交：`5a130da`（main）
 - 写域：`docs/arch/**`；`.cnb.yml` / `package.json` / `tsconfig.json` / `wrangler.jsonc` 的改动列在里程碑卡，不在本文件内执行
 - 相关：`AGENTS.md` 六条设计决策、`docs/arch/adr-001~003`、`docs/arch/roadmap.md`、`docs/perf/01~03`
+
+---
+
+## 0. 决策记录（2026-11-26 拍板）
+
+- 决策人：技术负责人（@fbigun）
+- 拍板方式：「按你的建议来」，即采纳本文 §5 推荐方案 B 与 §6 六张卡的优先级
+- 本节的效力高于下文正文：两者冲突时以本节为准（正文保留为当时论证）
+
+| # | 待拍板项 | 拍板结论 | 影响范围 |
+|---|---|---|---|
+| D1 | M1 是否进保护分支的状态检查 | **进**：M1 的流水线接入目标分支「需要通过状态检查」，**但仍不要求人工批准**（单人 + NPC 协作，自我批准是噪音） | 仓库页面设置（人工一次勾选）+ `.cnb.yml`；本文 §2.5 A1 的结论不变 |
+| D2 | R4（token 进日志）若为真选哪条路 | **已证实，且不是「若」**：两条独立的泄漏路径都实测存在（§0.1）。处置取「①代码侧路径归一 + ②平台侧关掉 invocation log + 开 query 脱敏」，**不采纳**「改协议挪 query」与 Tail Worker | 升为 **P1**，从 R4「`[待验证]`」改写为 M4 的前置必做项 |
+| D3 | 六张卡的排期是否照排 | 照排，顺序与依赖不变 | 无 |
+
+### 0.1 R4 的复核结果：`[待验证]` → 已证实
+
+原文 §2.5 A4 把这件事列为未知、§7 R4 给出三条处置路径。现在两条路径都已实测：
+
+**路径一：代码自己就打印了 token（原有缺陷，与平台无关）**
+
+`src/index.ts` 的 500 兜底日志打的是 `pathname` 原文：
+
+```js
+console.error(`${new URL(req.url).pathname}:`, e);   // /s/{token} 时 token 原样进日志
+```
+
+用 `test/fakes/env.ts` 的 `FakeKV.fail('link:secretTOKEN123')` 造一次 `/s/secretTOKEN123`
+的 500，捕获到的 `console.error` 实参是：
+
+```
+["/s/secretTOKEN123:", "boom"]      ← token 明文
+```
+
+这条与 Workers 平台无关，纯代码问题，**已违反** `AGENTS.md` 决策 4「日志脱敏」。
+
+**路径二：平台侧 invocation log 记录完整 URL（文档已确认，非猜测）**
+
+Cloudflare 官方文档 `workers/observability/logs/workers-logs/`（抓取于 2026-11-26）原文：
+
+> Each Workers invocation returns a single invocation log that contains details such as
+> the Request, Response, and related metadata.
+> …
+> For example, Fetch requests will have a message describing the request method and
+> **the request URL**
+
+且文中列出 invocation message 形态为 `Fetch → <Method> <URL>`。同一文档写明
+「All newly created Workers will come with the observability setting enabled by default」，
+而本仓 `wrangler.jsonc` **没有** `observability` 段（实测 `grep observability wrangler.jsonc` 空），
+即走默认值——**默认就在记录**。故 `/s/{token}` 的 token 会作为 URL 的一部分进 Workers Logs。
+
+### 0.2 落地形态（两处都已实测可用）
+
+1. **代码侧归一**（`src/index.ts`，1 个函数 + 1 行调用）：`/s/` 前缀统一记成 `/s/{token}`，
+   并输出结构化 JSON。实测替换后同一场景的日志实参为：
+
+   ```
+   {"event":"unhandled","path":"/s/{token}","err":"boom"}
+   ```
+
+   `npx tsc --noEmit` 零输出、`npx vitest run` 288 项全绿（现有 4 处 `vi.spyOn(console,'error')`
+   只断言「被调用过」，不匹配文案，无需改断言）。
+
+2. **平台侧关掉 invocation log 并脱敏 query**（`wrangler.jsonc`）：
+
+   ```jsonc
+   "observability": { "enabled": true, "redact_query_string": true, "logs": { "invocation_logs": false } }
+   ```
+
+   两个字段都取自 `wrangler@4.152.0` 的 `config-schema.json` 的
+   `definitions.Observability`：`logs.invocation_logs`（`Set to false to disable invocation logs`）、
+   `redact_query_string`（`Whether query strings are removed from request URLs in logs and traces`，默认 `false`）。
+   `npx wrangler deploy --dry-run` 通过，包体 **104.78 KiB / gzip 27.95 KiB**（与基线一致）。
+
+   取舍：`enabled: true` 保留，因为**自定义 `console.*` 仍然要进 Workers Logs**（M4 的价值在此）；
+   只关 `invocation_logs`——它记的是全量 URL，而本项目需要排障的字段（event / path / err）
+   已由代码侧结构化输出覆盖。
+
+3. **不采纳的两条**：`/s/` 改 query 传 token（改协议，破坏所有已发出的订阅链接，
+   且 `redact_query_string` 只是缓解而非根治）；Tail Worker 脱敏（新增运行时组件，
+   与「免费额度内单 Worker」约束冲突）。
 
 ---
 
@@ -136,7 +217,7 @@ All files    |   96.84 |    80.48 |     100 |   96.84
 | A1 | 是否希望 PR 门禁卡"必须 1 人批准" | 不卡（单人 + NPC 协作，卡批准会卡死自己） | 若引入第二个真人，改为 `pull_request.mergeable` |
 | A2 | 是否接受 CI 墙钟从 0 变 ~60s | 接受（9.4s 计算 + 依赖下载） | 加 `/root/.npm:copy-on-write` 卷，实测能把 npm ci 压到秒级 |
 | A3 | 期望的 tag / 发布节奏 | 打语义化 tag（`v1.x.y`），发布 = tag + main push | 若坚持"永远 latest"，则放弃 `wrangler rollback` 的版本锚点，回滚只能靠 revert + 重跑 |
-| A4 | Workers Logs 是否记录 `/s/{token}` 的完整 path | **未知，标 `[待验证]`**，不据它下结论 | 见 §7 R4，验证方法已给出 |
+| A4 | Workers Logs 是否记录 `/s/{token}` 的完整 path | ~~未知，标 `[待验证]`~~ → **已证实会记录**（§0.1，两条路径），处置见 §0.2 | 已在 §0.2 落地，不再依赖假设 |
 | A5 | 是否有第二个真实用户 | 无 | 若有，`/api/me` 的 `profile` 读放大与登录锁定全局计数都会变真问题 |
 
 > `[待验证]` 的处置纪律沿用 `docs/perf/02` 立的规矩：**没在对应环境实测过的，不许写成已通过。**
@@ -263,6 +344,13 @@ All files    |   96.84 |    80.48 |     100 |   96.84
 - 内容：`pull_request` 事件（glob `**`，覆盖所有源分支含 `npc/*`）→ 单任务
   `npm ci → npx tsc --noEmit → npx vitest run`；**不 imports 任何密钥仓库**
 - 顺带：`docker.volumes: /root/.npm:copy-on-write`（CNB 官方推荐做法，缓解 A2）
+- **已拍板（§0 D1）**：目标分支 `main` 设为保护分支，勾选「需要通过状态检查」，
+  **不勾**「需要评审人批准」。据 CNB 文档「触发规则」：
+  `pull_request` 在 PR 创建、重新打开、源分支 push 时触发，`pull_request.mergeable`
+  则要求目标分支是保护分支且勾了状态检查——两者分工是「跑检查」与「拦住合并」，
+  M1 两件都要配置，缺前者没结果、缺后者拦不住。
+- 配置来源提醒：`pull_request` 的 `.cnb.yml` **取自预合并后的 commit**（即 PR 分支自身的配置），
+  故分支上改 `.cnb.yml` 会在下一次 push 时生效，无需先合到 main 才能验证门禁。
 - **验收**：在分支上故意把 `test/golden.test.ts` 某行 sha 改 1 位 → 推 PR →
   流水线**红**；改回 → **绿**。贴两次流水线链接。
 - **失败即否决**：若 90s 内跑不完 M1 不成立，需回到方案 A 的纯 `tsc + vitest`（去掉 install 缓存调优前先量）。
@@ -292,19 +380,22 @@ All files    |   96.84 |    80.48 |     100 |   96.84
   golden 全部 sha 不变。
 - 回滚：单 PR revert。
 
-### M4 · 结构化脱敏日志（P2）
+### M4 · 结构化脱敏日志（**P1**，§0 D2 上调）
 
-- 写域：`src/index.ts`（1 处）、`wrangler.jsonc`、`test/index.test.ts`
-- 内容：
-  1. `console.error(path, e)` → `console.error(JSON.stringify({ event, path, err: errMsg(e) }))`
-     （Workers Logs 对 JSON 自动建索引，见 Cloudflare 文档"Logging structured JSON"）
-  2. `wrangler.jsonc` 显式声明 `observability: { enabled: true }`，
-     **不设 `head_sampling_rate`**（免费版 200k 条/天，本项目日请求量远低于此）
-  3. 新增单测：让 `FakeKV.fail('link:xx')` 抛错 → 断言捕获的日志字符串
-     **不含 token、不含订阅 URL**
-- **验收**：`grep -c "console" src/` 仍为 1；新增脱敏断言用例通过。
-- **风险**：日志格式变化会影响已有 4 处 `vi.spyOn(console,'error')` 断言的匹配方式，
-  需同步改（属允许的行为变化，PR 描述标注）。
+- 写域：`src/index.ts`（1 处 + 1 个新函数）、`wrangler.jsonc`、`test/index.test.ts`
+- 内容（§0.2 已实测全部可用，直接照抄）：
+  1. 500 兜底日志改为结构化 JSON 且路径归一：`/s/{token}` 记成 `/s/{token}` 字面量
+     （**这是本卡的核心，不是 P1 里的可选项**——现状实测会打印 token 明文）
+  2. `wrangler.jsonc` 加 `"observability": { "enabled": true, "redact_query_string": true, "logs": { "invocation_logs": false } }`
+  3. 新增单测：`env.kv.fail('link:secretTOKEN')` → 断言捕获的日志字符串**不含 token**、
+     且含 `event` 字段。这条断言是防回退的唯一机械手段。
+- **验收**：
+  - 新用例在「把 `logLine` 里的 `/s/` 归一去掉」这一变异下**必须变红**（跑完还原）
+  - `grep -c "console\." src/` 仍为 1
+  - `npx wrangler deploy --dry-run` 包体字节数不变（104.78 KiB / gzip 27.95 KiB）
+- **风险已消除**：原稿担心改日志格式会打破已有 4 处 `vi.spyOn(console,'error')` 断言。
+  实测这 4 处只断言 `toHaveBeenCalled()`（`test/index.test.ts` 的 500 与公开订阅两例），
+  不匹配文案，**无需改任何既有断言**。
 
 ### M5 · 发布与回滚规程（P2）
 
@@ -336,7 +427,7 @@ All files    |   96.84 |    80.48 |     100 |   96.84
 | M1 PR 门禁 | **P0** | 无 | — | ✅ |
 | M2 覆盖率 | P1 | M1（复用同一条任务） | 与 M3 并行 | ✅ |
 | M3 严格化 | P1 | M1（否则改坏了没人拦） | 与 M2 并行 | ✅ 每步 |
-| M4 结构化日志 | P2 | M1 | 与 M3 并行（写域不重叠） | ✅ |
+| M4 结构化日志 | **P1**（§0 D2 上调） | 无（可与 M1 并行，写域不重叠） | 与 M1/M3 并行 | ✅ |
 | M5 回滚规程 | P2 | 无 | 任意 | ✅（纯文档） |
 | M6 协作契约 | P3 | M5（tag 规范先定） | 任意 | ✅（纯新增） |
 
@@ -352,7 +443,7 @@ M3 的"golden sha 不变"就只能靠人肉核对。
 | R1 | PR 门禁墙钟超 90s，打断 43 次/月的节奏 | 中 | 中 | 先量再调：若 npm ci > 40s 则加 `volumes` 缓存；若仍超，PR 只跑 `tsc + vitest`（9.4s 计算），覆盖率挪到 main |
 | R2 | 并发 PR（NPC 多角色协同）导致抢同一文件 | **高**（`npc/*` 分支是既有事实） | 中 | 门禁天然并行；冲突靠 `git:auto-merge` 前置 + 写域声明（本 ADR 每卡都写了 `写域`）。**不做**自动合并，直接引用 CNB `git:auto-merge` 仅在保护分支+状态检查通过后启用 |
 | R3 | `@vitest/coverage-v8` 大版本与 vitest 漂移 | 中 | 低 | 锁 `^3` 与 `vitest@^3` 同主版本；测试跑不通即视为 M2 未完成，不静默降级 |
-| R4 | **Workers Logs 的 invocation log 可能记录 `/s/{token}` 完整 path，使 token 进日志**（代码不打印 token，平台可能记录） | **未知 `[待验证]`** | **高**（token 即订阅凭据） | 验证：`npx wrangler tail --format json` 抓一次 `/s/{token}`，看 `event.request.url` 是否含 token。若含 → 三选一：① 接受（单管理员、日志仅自己可见、免费版 3 天保留）；② `/s/` 改用 query 传 token 并设 `redact_query_string`（**改协议，需用户确认**）；③ Tail Worker 脱敏（**引入付费/复杂组件，不推荐**） |
+| R4 | **`/s/{token}` 的 token 进日志** —— ~~可能~~ **已证实，两条独立路径**：① 代码自己打印 `pathname` 原文；② Workers Logs 的 invocation log 记录 `<Method> <URL>` | **已发生** | **高**（token 即订阅凭据） | 处置已定并实测（§0.1/§0.2）：代码侧路径归一 + `invocation_logs: false` + `redact_query_string: true`，落在 M4。**否决**「改 query 传 token」（破坏已发出的订阅链接）与「Tail Worker 脱敏」（新增运行时组件）。残余风险：M4 合入前产生的历史日志仍含 token——免费版保留 3 天，可等自然过期，无需处置 |
 | R5 | `noUncheckedIndexedAccess` 在 `parse.ts` 的 20 处改造引入行为变化 | 中 | **高**（parse 是正确性核心） | 每步都必须 golden 8 行 sha 全不变 + 288 项全绿；任一行 sha 变即 revert 该步，逐字节解释后再来 |
 | R6 | 覆盖率红线导致"为覆盖率写测试"的劣化 | 中 | 中 | 红线只设全量下限（95%），**永不按文件卡**；PR 模板要求说明新测试验证的是什么行为 |
 | R7 | 165/165 个依赖的 lockfile 全部指向 `registry.npmmirror.com`，镜像不可用时 CI 全红 | 低 | 中 | CI 加 fallback：先默认源，失败重试 npmmirror；`integrity` 字段齐全（实测 165/165），换源不破坏可复现性 |
@@ -412,3 +503,9 @@ M3 的"golden sha 不变"就只能靠人肉核对。
 | 本机 CI 计算耗时 | npm ci 2.4s / tsc 2.0s / vitest 3.3s / dry-run 1.7s |
 | 依赖源 | `grep -c registry.npmmirror.com package-lock.json` → 165；`grep -c registry.npmjs.org` → 0 |
 | `wrangler dev` 冒烟 | `npx wrangler dev --local --test-scheduled` 后 `curl /api/me` → `{"initialized":false,"authed":false}`；`curl "/__scheduled?cron=..."` → 200 |
+| R4 路径一：代码打印 token 明文 | 用 `test/fakes/env.ts` 造 `/s/secretTOKEN123` 的 500，spy `console.error` → 实参 `["/s/secretTOKEN123:", "boom"]`；同一场景下 `FakeKV.fail('link:secretTOKEN123')` 触发 `subs.getLink` 抛错 |
+| R4 路径二：invocation log 记 `<Method> <URL>` | `curl -s https://developers.cloudflare.com/workers/observability/logs/workers-logs/ \| grep -o "the request URL"`；`grep -c observability wrangler.jsonc` → 0（走默认，默认开启） |
+| §0.2 归一后日志实参 | 同一 500 场景 → `{"event":"unhandled","path":"/s/{token}","err":"boom"}`（不含 token） |
+| `observability.logs.invocation_logs` / `redact_query_string` 存在 | `node -e "const s=require('./node_modules/wrangler/config-schema.json');console.log(Object.keys(s.definitions.Observability.properties.logs.properties))"` → 含 `invocation_logs`；`Object.keys(s.definitions.Observability.properties)` → 含 `redact_query_string` |
+| 加了 observability 段后包体不变 | `npx wrangler deploy --dry-run --outdir /tmp/out2` → 104.78 KiB / gzip 27.95 KiB |
+| 既有 4 处 console spy 是否匹配文案 | `grep -n "spyOn(console, 'error')" test/index.test.ts` → 1149/1163/1361/1373，断言均为 `toHaveBeenCalled()` |
