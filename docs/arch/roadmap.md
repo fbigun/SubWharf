@@ -229,25 +229,35 @@ ADR-001 的模块拆分让依赖方向可判定、`auth.ts` review 面收窄—�
 
 ## 4. 行为等价判据：golden 基线
 
-模块拆分与 KV 改造的**唯一可靠验收**是输出逐字节不变。基线在 `ee659eb` 上实测
-（`.probe/golden.ts`，6 种协议各一个节点，经名称清洗后序列化）：
+模块拆分与 KV 改造的**唯一可靠验收**是输出逐字节不变。
 
-| 输出 | 字节数 | sha256 前 16 位（基线 `ee659eb`） |
-|---|---|---|
-| `renderClash(rules=none)` | 1631 | `c78a566cdf3b0a4f` |
-| `renderClash(rules=cn)` | 1709 | `c1fdff4533b2a88d` |
-| `renderSingbox(rules=none)` | 2549 | `70bb6d6c44cefa12` |
-| `renderSingbox(rules=cn,official)` | 3493 | `011cf59c68a22028` |
-| `renderSingbox(rules=cn,jsdelivr)` | 3481 | `79d09d4e4777d2c6` |
-| `renderUri` | 1033 | `aa648480372a86d3` |
-| `renderBase64` | 1380 | `86d3b5237135bc73` |
-| 复解析往返（`parseSubscription(renderBase64(...))`） | 6 节点 | `37342569f1ea03e1` |
+**唯一真值在代码里**：`test/golden.test.ts` 的 `GOLDEN` 表（8 行：字节数 + sha256 前 16 位）
+与其自包含夹具 `FIXTURES`。
 
-**用法**：每张卡的 PR 必须在描述里贴出改造后重跑的同一张表，与上表逐行对比。
+```bash
+npx vitest run test/golden.test.ts     # 10 项全绿 = 当前输出与基线一致
+```
+
+**用法**：每张卡的 PR 在描述里贴出上一条命令的输出，并说明是否改动过 `src/render|parse|rename`。
 任何一行 sha 变化都必须在 PR 里**逐字节解释原因**，否则视为行为不等价、不予合并。
+`git diff --stat <基线提交> HEAD -- src/render.ts src/parse.ts src/rename.ts` 为空，则输出未漂移，
+连 sha 都不必逐行比对。
+
+> **本节曾是 8 行具体数字的表格（基线 `ee659eb`，产出脚本 `.probe/golden.ts`）。**
+> 该表于 2026-11-26 删除（ADR-005 §0.3），三条理由：
+>
+> 1. 那 8 个数字与 `test/golden.test.ts` 的 `GOLDEN` 表**没有一行相同**——文档要求
+>    「PR 里贴出改造后重跑的表逐行对比」，照抄这条指令只会得出「全部不符」。
+> 2. 产出它的 `.probe/golden.ts` **从未入库**（`git log --all -- '.probe/'` 查空），
+>    仓库里没有任何人能复算那 8 个数字，它们是死数据。
+> 3. 代码那张表今天能跑：在基线 `0ffbf37` 与 `5a130da` 上各跑一次 `test/golden.test.ts`
+>    均 10 项全绿，且 `git diff ee659eb..5a130da -- src/parse.ts` 只有 2 行
+>    （`tryBase64` 复用 `b64ToBytes`，输出未变）——两者共同说明基线自洽。
+>
+> 保留为教训：**文档不复制代码里的真值，只写指针。**
 
 > 已知的一处例外：W2-2 会改 `renderAll` 返回类型（`number` → 对象），
-> 这不影响上表（上表只覆盖 `render*` 输出），但会影响 `test/template.test.ts` 断言。
+> 这不影响 `GOLDEN`（它只覆盖 `render*` 纯函数输出），但会影响 `test/template.test.ts` 断言。
 
 ## 5. 需要用户确认的事项（按 `AGENTS.md`「变更前必须与用户确认」）
 
