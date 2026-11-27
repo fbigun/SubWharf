@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import type { Env } from '../src/auth';
 import type { ProxyNode } from '../src/parse';
 import { createLink, getLink, type LinkRec } from '../src/subs';
 import {
@@ -12,6 +11,7 @@ import {
   renderAll,
   updateTemplate,
 } from '../src/template';
+import { makeEnv } from './fakes/env';
 
 const node = (name: string): ProxyNode => ({ name, type: 'ss', server: 's.example.com', port: 8388, cipher: 'aes-128-gcm', password: 'pw' });
 
@@ -123,29 +123,6 @@ describe('normalizeTemplateUrl', () => {
   });
 });
 
-function kvStub(data: Record<string, unknown>) {
-  const store = new Map(Object.entries(data).map(([k, v]) => [k, JSON.stringify(v)]));
-  const env = {
-    KV: {
-      async get(key: string, type?: string) {
-        if (!store.has(key)) return null;
-        const value = store.get(key)!;
-        return type === 'json' ? JSON.parse(value) : value;
-      },
-      async put(key: string, value: string) {
-        store.set(key, value);
-      },
-      async delete(key: string) {
-        store.delete(key);
-      },
-      async list({ prefix }: { prefix: string }) {
-        return { keys: [...store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })) };
-      },
-    },
-  } as unknown as Env;
-  return { env, store };
-}
-
 const tplText = (final: string) =>
   JSON.stringify({ inbounds: [{ type: 'tun' }], outbounds: [{ type: 'selector', tag: '手动', outbounds: [] }], route: { final } });
 
@@ -180,7 +157,7 @@ describe('多模板绑定与缓存', () => {
   });
 
   it('按链接绑定的模板分别生成，未绑定的链接不生成', async () => {
-    const { env } = kvStub(seed());
+    const env = makeEnv(seed());
     expect(await renderAll(env)).toBe(2);
     expect(JSON.parse((await getOutput(env, 'a'))!.config).route.final).toBe('A');
     expect(JSON.parse((await getOutput(env, 'b'))!.config).route.final).toBe('B');
@@ -188,7 +165,7 @@ describe('多模板绑定与缓存', () => {
   });
 
   it('删除模板时解除链接绑定并清除其缓存，其他模板不受影响', async () => {
-    const { env } = kvStub(seed());
+    const env = makeEnv(seed());
     await renderAll(env);
     expect(await deleteTemplate(env, 't1')).toBe(true);
     expect(await getTemplate(env, 't1')).toBeNull();
@@ -199,7 +176,7 @@ describe('多模板绑定与缓存', () => {
   });
 
   it('修改模板地址会丢弃旧原文与缓存，名称修改不动原文', async () => {
-    const { env } = kvStub(seed());
+    const env = makeEnv(seed());
     await renderAll(env);
     await updateTemplate(env, 't2', { name: '新名称' });
     expect((await getTemplate(env, 't2'))!.text).toBeTruthy();
@@ -214,14 +191,14 @@ describe('多模板绑定与缓存', () => {
   });
 
   it('新增模板会归一化地址并补默认名称', async () => {
-    const { env } = kvStub({});
+    const env = makeEnv({});
     const rec = await createTemplate(env, { name: '  ', url: 'https://cnb.cool/o/r/-/blob/main/t.json' });
     expect(rec.name).toBe('未命名模板');
     expect(rec.url).toBe('https://cnb.cool/o/r/-/git/raw/main/t.json');
   });
 
   it('仅 singbox 链接保留模板绑定', async () => {
-    const { env } = kvStub({});
+    const env = makeEnv({});
     const clash = await createLink(env, { label: 'c', target: 'clash', templateId: 't1' });
     expect(clash.templateId).toBeUndefined();
     const singbox = await createLink(env, { label: 's', target: 'singbox', templateId: 't1' });
@@ -229,7 +206,7 @@ describe('多模板绑定与缓存', () => {
   });
 
   it('非 singbox 链接不生成模板缓存', async () => {
-    const { env } = kvStub({ 'link:x': { ...linkRec('x', 't1'), target: 'clash' }, 'template:t1': tplRec('t1', 'A') });
+    const env = makeEnv({ 'link:x': { ...linkRec('x', 't1'), target: 'clash' }, 'template:t1': tplRec('t1', 'A') });
     expect(await renderAll(env)).toBe(0);
     expect(await getOutput(env, 'x')).toBeNull();
   });

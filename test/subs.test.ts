@@ -1,20 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { collectNodes, collectPool, readTextLimited, type LinkRec, type SnapshotRec, type SubRec } from '../src/subs';
-import type { Env } from '../src/auth';
+import { makeEnv } from './fakes/env';
 
-function kvStub(data: Record<string, unknown>): Env {
-  const store = new Map(Object.entries(data));
-  return {
-    KV: {
-      async list({ prefix }: { prefix: string }) {
-        return { keys: [...store.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })) };
-      },
-      async get(key: string) {
-        return store.has(key) ? store.get(key) : null;
-      },
-    },
-  } as unknown as Env;
-}
+// 统一用 fakes/env 的 KV 桩：它会按 Cloudflare 语义处理 get 的 type 参数，
+// 漏写反序列化参数这类回归才会被用例抓到（本文件旧内联桩忽略 type，对这类缺陷是盲的）。
+const kvStub = (data: Record<string, unknown>) => makeEnv(data);
 
 const sub = (id: string, name: string, over: Partial<SubRec> = {}): SubRec => ({
   id,
