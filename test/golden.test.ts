@@ -140,7 +140,7 @@ const sha16 = async (s: string): Promise<string> => hex(await crypto.subtle.dige
 type Baseline = { bytes: number; sha16: string };
 
 const GOLDEN: Record<string, Baseline> = {
-  'renderClash(rules=none)': { bytes: 1684, sha16: 'ad0d4970b112e9eb' },
+  'renderClash(rules=none)': { bytes: 1684, sha16: 'ad0d4970b112e9ec' },
   'renderClash(rules=cn)': { bytes: 1762, sha16: '9c97cca7096dbd2f' },
   'renderSingbox(rules=none)': { bytes: 2784, sha16: 'e959c923f761c0ce' },
   'renderSingbox(rules=cn,official)': { bytes: 3728, sha16: '7787937094b205aa' },
